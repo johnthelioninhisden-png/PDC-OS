@@ -1,0 +1,1724 @@
+# **PDC-OS — Full Operating System Architecture & Development Roadmap**
+
+**Target: A general-purpose, expandable, multi-architecture operating system.**
+
+Now we're going to approach PDC-OS as a proper long-term OS engineering project, rather than a kernel prototype that gradually accumulates features.
+
+I want the architecture to support all of the following eventually:
+
+- Desktop computing and everyday applications.
+- Development environments and native compilation.
+- Networking, internet access, and server workloads.
+- Persistent storage and package management.
+- Multiple users, processes, and threads.
+- Graphical applications and multimedia.
+- Virtualization and containers.
+- Multiple CPU architectures.
+- A native PDC software ecosystem.
+
+And importantly, I don't want you to have to rewrite half the kernel to get there.
+
+
+Check this mark when done [x]
+
+
+## **1. Foundational design decisions**
+
+These are the architectural decisions I'd establish as the baseline for PDC-OS.
+
+# **PDC-OS**
+
+Proposed architecture baseline
+
+| Component            | Design                               |
+| -------------------- | ------------------------------------ |
+| Kernel               | Monolithic, modular                  |
+| Primary language     | Rust                                 |
+| Assembly             | Architecture-specific NASM initially |
+| Initial architecture | x86-64                               |
+| Future architectures | AArch64, RISC-V 64                   |
+| Execution model      | Preemptive multitasking              |
+| Privilege model      | Ring 0 / Ring 3                      |
+| Memory model         | Per-process virtual address spaces   |
+| Scheduler            | Preemptive, policy-pluggable         |
+| Filesystem           | VFS + interchangeable drivers        |
+| Native executable    | PDE                                  |
+| Kernel ABI           | Versioned PDC ABI                    |
+| Userspace            | Independent processes                |
+| Drivers              | Modular hybrid architecture          |
+| Networking           | Layered TCP/IP stack                 |
+| GUI                  | Userspace compositor                 |
+| Build system         | Reproducible cross-compilation       |
+
+### **Architectural rules**
+
+I would make these non-negotiable:
+
+1. Architecture-independent code cannot directly manipulate CPU-specific hardware.
+2. Every allocated resource has explicit ownership and lifetime.
+3. Kernel subsystems communicate through defined interfaces.
+4. Userspace applications never receive unrestricted kernel privileges.
+5. Hardware drivers expose standardized interfaces.
+6. Filesystems are independent of physical storage drivers.
+7. Executable format and syscall ABI are independent specifications.
+8. Every subsystem has tests for failure, exhaustion, and cleanup.
+9. Kernel features must not silently depend on optional hardware.
+10. New architecture ports must implement the same documented kernel contracts.
+
+### **Recommended high-level architecture**
+
+
+The key is that adding AArch64 should require a new architecture backend, not rewriting the VFS, process model, networking stack, or security policy.
+
+
+Check this mark when done [x]
+
+# **2. Kernel restructuring before feature expansion**
+
+I would gradually move the current repository toward this structure.
+
+```
+PDC-OS/
+│
+├── arch/
+│   ├── x86_64/
+│   │   ├── boot/
+│   │   ├── interrupts/
+│   │   ├── paging/
+│   │   ├── context/
+│   │   ├── syscall/
+│   │   └── cpu/
+│   │
+│   ├── aarch64/
+│   └── riscv64/
+│
+├── boot/
+│   ├── protocol/
+│   ├── boot_info/
+│   └── memory_map/
+│
+├── kernel/
+│   ├── core/
+│   ├── memory/
+│   ├── scheduler/
+│   ├── process/
+│   ├── interrupts/
+│   ├── syscall/
+│   ├── security/
+│   ├── recovery/
+│   ├── performance/
+│   ├── synchronization/
+│   └── objects/
+│
+├── hal/
+│   ├── cpu/
+│   ├── memory/
+│   ├── interrupts/
+│   ├── timers/
+│   └── devices/
+│
+├── drivers/
+│   ├── bus/
+│   │   ├── pci/
+│   │   └── usb/
+│   ├── storage/
+│   ├── network/
+│   ├── display/
+│   ├── input/
+│   └── audio/
+│
+├── fs/
+│   ├── vfs/
+│   ├── ramfs/
+│   ├── fat/
+│   ├── devfs/
+│   ├── procfs/
+│   └── native/
+│
+├── net/
+│   ├── ethernet/
+│   ├── ipv4/
+│   ├── ipv6/
+│   ├── tcp/
+│   ├── udp/
+│   ├── sockets/
+│   └── security/
+│
+├── userspace/
+│   ├── init/
+│   ├── shell/
+│   ├── runtime/
+│   ├── libc/
+│   ├── services/
+│   └── applications/
+│
+├── executable/
+│   ├── pde/
+│   └── elf/
+│
+├── tools/
+│   ├── pde-inspect/
+│   ├── pde-convert/
+│   ├── image-builder/
+│   └── sdk/
+│
+├── tests/
+├── scripts/
+├── docs/
+└── Makefile
+```
+
+This is the target organization, not a demand to move every file immediately.
+
+I would migrate subsystem by subsystem, keeping the build functional throughout.
+
+Check this mark when done [x]
+
+# **3. Kernel development stages: PDC-OS 0.1–0.6**
+
+This is the most important addition to your roadmap.
+
+Your existing 0.1.0 is the baseline. I'd use 0.2–0.6 to transform it from a broad kernel prototype into a properly integrated OS kernel.
+
+These are architectural release milestones, not arbitrary calendar deadlines.
+
+
+Check this mark when done [] 
+
+
+
+# **Kernel evolution**
+
+1. **0.1.0 — Foundational kernel**
+
+   Existing baseline
+
+   Bootable kernel, memory allocator, scheduler, interrupts, VFS, shell, syscall prototype, diagnostics.
+2. **0.2.0 — Kernel architecture stabilization**
+
+   Explicit subsystem boundaries, HAL, memory ownership, stack architecture, address-space design, synchronization and testing.
+3. **0.3.0 — Protected execution**
+
+   Real Ring 3, independent process address spaces, user-copy functions, TSS, thread model, safe syscall boundary.
+4. **0.4.0 — Persistent system**
+
+   Block-device abstraction, persistent filesystem, PCI enumeration, device manager, storage reliability.
+5. **0.5.0 — Native execution and networking**
+
+   PDE loader, userspace runtime foundations, sockets, network drivers, TCP/IP, TLS groundwork.
+6. **0.6.0 — General-purpose kernel foundation**
+
+   Stable process lifecycle, service management, filesystem integration, kernel security, ACPI/APIC, multi-core preparation and release hardening.
+
+
+Check this mark when done [] 
+
+
+
+## **PDC-OS 0.2.0 — Kernel architecture stabilization**
+
+**Goal:** Make the existing subsystems coherent, independently maintainable, and ready for protected execution.
+
+IMPLEMENTATION CHECKLIST
+
+
+Check this mark when done [] 
+
+
+
+### **1. Repository and subsystem organization**
+
+- Establish `arch/x86_64/` separation.
+- Introduce a formal HAL interface.
+- Separate generic kernel code from hardware-specific implementations.
+- Establish subsystem initialization contracts.
+- Standardize kernel error types.
+- Establish explicit resource ownership rules.
+- Document subsystem dependencies.
+- Introduce kernel-wide invariant checks.
+
+
+Check this mark when done [] 
+
+
+
+### **2. Memory architecture**
+
+- Formalize physical address and virtual address types.
+- Document the complete x86-64 virtual address layout.
+- Define kernel and userspace mapping boundaries.
+- Formalize page-table ownership.
+- Separate physical frame ownership from mapping references.
+- Add recursive address-space cleanup.
+- Add NXE and CR0.WP initialization.
+- Add mapping validation and overflow protection.
+- Establish TLB invalidation interfaces.
+
+
+Check this mark when done [] 
+
+
+
+### **3. Stack and execution architecture**
+
+- Separate process and thread structures.
+- Establish thread-owned kernel stacks.
+- Establish thread-owned user stacks.
+- Introduce configurable stack allocation.
+- Add kernel stack guard pages.
+- Add stack usage monitoring.
+- Introduce per-CPU interrupt-stack abstractions.
+- Prepare TSS and IST infrastructure.
+
+
+Check this mark when done [] 
+
+
+
+### **4. Scheduler and synchronization**
+
+- Separate scheduling policy from architecture-specific context switching.
+- Establish a generic thread context interface.
+- Introduce consistent thread states and lifecycle transitions.
+- Audit every IRQ-safe lock.
+- Add lock ownership and lock-order diagnostics where practical.
+- Establish blocking/wakeup contracts.
+- Add scheduler stress tests.
+
+
+Check this mark when done [] 
+
+
+
+### **5. Driver and device architecture**
+
+- Introduce device registration interfaces.
+- Separate bus discovery from driver implementation.
+- Establish driver lifecycle management.
+- Standardize hardware resource ownership.
+- Establish interrupt registration interfaces.
+
+
+Check this mark when done [] 
+
+
+### **6. Verification**
+
+- Test repeated allocation/deallocation.
+- Test heap exhaustion.
+- Test page-table destruction.
+- Test task creation and cleanup.
+- Test lock contention and interrupt safety.
+- Test malformed boot information.
+- Verify reproducible release builds.
+
+**Release criterion:** All existing functionality continues working, with documented subsystem contracts and no known ownership or cleanup violations in the tested paths.
+
+Check this mark when done [] 
+
+
+## **PDC-OS 0.3.0 — Protected execution**
+
+**Goal:** Turn your existing process and syscall prototypes into a genuinely protected userspace environment.
+
+Check this mark when done [] 
+
+
+### **1. Address spaces**
+
+- Implement separate PML4 roots per process.
+- Establish shared kernel mappings.
+- Establish private userspace mappings.
+- Implement safe page-table creation/destruction.
+- Implement mapping reference tracking.
+- Implement TLB invalidation.
+- Add page-fault recovery for userspace faults.
+- Implement address-space activation during context switches.
+
+Check this mark when done [] 
+
+
+### **2. Privilege transitions**
+
+- Implement GDT Ring 3 descriptors.
+- Implement TSS initialization.
+- Implement per-thread kernel-stack selection through TSS.
+- Implement controlled Ring 0 → Ring 3 entry.
+- Implement safe Ring 3 → Ring 0 syscall entry.
+- Implement critical exception IST stacks.
+- Validate register preservation and interrupt-frame handling.
+
+Check this mark when done [] 
+
+
+### **3. Syscall security**
+
+- Implement `copy_from_user`.
+- Implement `copy_to_user`.
+- Validate mapping permissions.
+- Handle user-memory faults safely.
+- Define syscall blocking and interruption behavior.
+- Document the syscall register ABI.
+- Test invalid pointers and boundary crossings.
+- Prevent userspace access to privileged hardware operations.
+
+Check this mark when done [] 
+
+
+### **4. Process and thread lifecycle**
+
+- Separate processes from scheduler threads.
+- Implement real process creation.
+- Implement thread creation and termination.
+- Implement process exit and reaping.
+- Implement parent/child relationships.
+- Implement `waitpid`.
+- Implement process resource cleanup.
+- Establish signal delivery semantics.
+
+Check this mark when done [] 
+
+
+### **5. Executable infrastructure**
+
+- Finalize PDE v1 specification.
+- Define executable architecture identifiers.
+- Define segment permissions.
+- Define relocation types.
+- Implement strict format validation.
+- Implement the PDE loader.
+- Retain ELF64 as an optional import/development format.
+- Start with statically linked executables.
+
+**Release criterion:** A real Ring 3 application can execute, make syscalls, access permitted resources, and crash without crashing the kernel.
+
+This is a particularly important release. I would not rush it.
+
+Check this mark when done [] 
+
+
+## **PDC-OS 0.4.0 — Persistent system and hardware discovery**
+
+**Goal:** Make the OS capable of storing real data and managing discovered hardware through standardized interfaces.
+
+Check this mark when done [] 
+
+
+### **1. Block-device subsystem**
+
+- Create `src/drivers/storage/block.rs` or equivalent.
+- Define a `BlockDevice` interface.
+- Support sector reads.
+- Support sector writes.
+- Support device flushing.
+- Expose capacity and logical block size.
+- Validate sector ranges and arithmetic overflow.
+- Implement ATA LBA28.
+- Implement ATA LBA48.
+- Preserve ATA PIO as a fallback.
+
+I would define the interface with sector counts and explicit flush semantics, rather than simply exposing raw byte operations.
+
+Check this mark when done [] 
+
+
+### **2. PCI and device manager**
+
+- Implement PCI configuration-space enumeration.
+- Discover vendor/device IDs.
+- Parse BAR resources.
+- Implement PCI bus/device/function discovery.
+- Establish device matching.
+- Introduce device lifecycle tracking.
+- Add interrupt routing integration.
+
+Check this mark when done [] 
+
+
+### **3. Filesystem architecture**
+
+- Formalize VFS vnode/inode abstractions.
+- Implement filesystem-specific operation tables.
+- Implement persistent FAT32 support.
+- Mount disk volumes through the VFS.
+- Add `/dev` foundation.
+- Add per-process file descriptor tables.
+- Add open-file object management.
+- Implement file creation, deletion, and directory operations.
+- Implement `fsync` and device flush propagation.
+- Add filesystem recovery and corruption checks.
+
+**Filesystem choice:** I'd use FAT32 initially, preferably through a no_std-compatible implementation, for a simple interoperable persistent filesystem.
+
+Later, I'd develop a native PDC filesystem with journaling or copy-on-write metadata.
+
+Check this mark when done [] 
+
+
+### **4. Terminal infrastructure**
+
+- Formalize terminal dimensions and capabilities.
+- Implement ANSI/VT100-compatible escape parsing.
+- Implement cursor positioning.
+- Implement screen clearing.
+- Implement text attributes.
+- Introduce canonical and raw input modes.
+- Add terminal control ioctls.
+- Establish the terminal device interface.
+
+Check this mark when done [] 
+
+
+### **5. Verification**
+
+- Test persistent disk writes across reboot.
+- Test filesystem mount/unmount.
+- Test invalid sector requests.
+- Test disk-full behavior.
+- Test interrupted writes.
+- Test multiple open file handles.
+- Test terminal input modes.
+
+**Release criterion:** PDC-OS can reliably store, retrieve, edit, and preserve files across reboots.
+
+
+Check this mark when done [] 
+
+
+
+## **PDC-OS 0.5.0 — Native execution and networking**
+
+**Goal:** Give PDC-OS a real application environment and internet connectivity.
+
+Check this mark when done [] 
+
+
+### **1. PDE and userspace**
+
+- Finalize PDE v1.
+- Implement `pde-inspect`.
+- Implement `pde-convert`.
+- Implement static linking.
+- Create the PDC Runtime foundation.
+- Implement process startup conventions.
+- Implement userspace initialization.
+- Move the shell toward a standalone userspace process.
+- Implement environment variables.
+- Establish application exit semantics.
+
+Check this mark when done [] 
+
+
+### **2. Networking hardware**
+
+- Implement PCI network-device discovery.
+- Implement E1000 for QEMU.
+- Implement DMA-safe buffers.
+- Establish DMA mapping and coherency rules.
+- Implement RX/TX descriptor management.
+- Implement interrupt-driven packet notification.
+- Move packet processing outside interrupt context.
+
+Check this mark when done [] 
+
+
+### **3. Networking stack**
+
+- Integrate smoltcp or an equivalent no_std stack.
+- Implement Ethernet.
+- Implement ARP.
+- Implement IPv4.
+- Implement ICMP.
+- Implement UDP.
+- Implement TCP.
+- Implement DNS.
+- Implement socket abstractions.
+- Integrate sockets with process file descriptors.
+
+Check this mark when done [] 
+
+
+### **4. Network applications**
+
+- Implement `ping`.
+- Implement `nslookup`.
+- Implement `fetch`.
+- Implement HTTP/1.1 support.
+- Implement connection timeout handling.
+- Implement network diagnostics.
+
+Check this mark when done [] 
+
+
+### **5. Cryptographic foundations**
+
+- Implement a trustworthy entropy source.
+- Implement a kernel CSPRNG.
+- Implement `getrandom`.
+- Add hardware RNG support where available.
+- Implement RTC time discovery.
+- Establish secure random-seed handling.
+- Integrate a no_std TLS implementation.
+- Implement certificate-chain validation.
+- Add root CA management.
+- Implement HTTPS.
+
+**Important corrections to the original plan:**
+
+- TSC jitter alone is not a cryptographically secure entropy source. Use a properly designed entropy subsystem, hardware RNG where available, and fail safely when sufficient entropy isn't available.
+- Use `RDRAND`/`RDSEED` only after checking CPU support and handling instruction failures.
+- For TLS tests, use a controlled HTTPS test server rather than relying on external internet availability.
+- QEMU's user-mode networking is convenient, but ICMP behavior can differ from a real network. Don't make one ping test the sole indicator of network functionality.
+
+Check this mark when done [] 
+
+
+### **6. Verification**
+
+- Test network interface initialization.
+- Test RX/TX packet handling.
+- Test UDP.
+- Test TCP.
+- Test DNS.
+- Test HTTP.
+- Test TLS handshakes.
+- Test certificate validation failures.
+- Test socket cleanup.
+
+**Release criterion:** A standalone PDE application can access the network, resolve DNS, fetch HTTP resources, and make validated HTTPS connections.
+
+Check this mark when done [] 
+
+
+## **PDC-OS 0.6.0 — General-purpose kernel foundation**
+
+**Goal:** Establish a stable kernel capable of supporting a proper desktop and development environment.
+
+Check this mark when done [] 
+
+
+### **1. System services**
+
+- Establish a proper PID 1 userspace init.
+- Move system startup configuration into userspace.
+- Establish service lifecycle management.
+- Implement service restart policies.
+- Implement user sessions.
+- Formalize system shutdown and reboot.
+- Implement system logging.
+- Implement resource monitoring.
+
+Check this mark when done [] 
+
+
+### **2. Process functionality**
+
+- Implement complete `fork` semantics.
+- Implement copy-on-write.
+- Implement `exec` with PDE.
+- Implement `waitpid`.
+- Implement anonymous pipes.
+- Implement file descriptor duplication.
+- Implement redirection.
+- Implement job control.
+- Implement basic shell scripting.
+
+Check this mark when done [] 
+
+
+### **3. Security and reliability**
+
+- Establish process-level access controls.
+- Strengthen UID/GID permissions.
+- Implement signal isolation.
+- Audit syscall boundaries.
+- Add kernel fault containment.
+- Add structured crash reports.
+- Expand security tests.
+- Add filesystem and process fuzzing.
+- Test resource exhaustion.
+
+Check this mark when done [] 
+
+
+### **4. ACPI and interrupt infrastructure**
+
+- Implement ACPI table discovery.
+- Parse RSDP, RSDT/XSDT, MADT and FADT.
+- Implement Local APIC support.
+- Implement I/O APIC support.
+- Migrate away from the legacy PIC as the primary interrupt controller.
+- Implement ACPI shutdown.
+- Establish per-CPU data structures.
+- Prepare SMP startup infrastructure.
+
+Check this mark when done [] 
+
+
+### **5. Storage and display readiness**
+
+- Implement AHCI.
+- Retain ATA PIO fallback.
+- Implement Multiboot2 framebuffer discovery.
+- Implement UEFI-compatible boot support.
+- Implement framebuffer console rendering.
+- Establish display-independent terminal interfaces.
+
+Check this mark when done [] 
+
+
+### **6. Release engineering**
+
+- Establish a stable kernel configuration model.
+- Establish hardware profiles.
+- Establish automated regression testing.
+- Establish release artifact manifests.
+- Verify reproducible builds.
+- Document supported hardware.
+- Publish PDC-OS 0.6.0 architecture documentation.
+
+**Release criterion:** PDC-OS has a protected, persistent, network-capable, multi-process kernel with a standalone userspace foundation and a defined route to desktop computing.
+
+
+Check this mark when done [] 
+
+
+
+# **4. Full operating-system roadmap: post-0.6**
+
+Once 0.6.0 is complete, I would stop treating PDC-OS as primarily a kernel-development project and start treating it as a complete platform.
+
+The following roadmap preserves your original ambitions, but reorders some dependencies and separates features that should not be coupled.
+
+The original 20 phases are reorganized into 15 larger development milestones. Nothing important is being discarded.
+
+Check this mark when done [] 
+
+
+# **Phase 1 — Text-mode development environment**
+
+First major userspace milestone
+
+**Goal:** Make PDC-OS usable for everyday command-line work.
+
+Check this mark when done [] 
+
+
+### **Terminal**
+
+- Complete ANSI/VT100 support.
+- Implement terminal resizing and capability discovery.
+- Implement terminal sessions.
+- Implement scrollback and history.
+- Implement raw and canonical input.
+- Implement keyboard layout management.
+
+Check this mark when done [] 
+
+
+### **Text editor**
+
+- Implement a standalone PDE text editor.
+- Implement dynamic line-buffer storage.
+- Implement cursor movement.
+- Implement selection and clipboard foundations.
+- Implement save/load through VFS.
+- Implement search and replace.
+- Implement syntax highlighting.
+- Implement undo/redo.
+- Implement terminal status bars.
+
+Check this mark when done [] 
+
+
+### **Shell**
+
+- Implement pipelines.
+- Implement input/output redirection.
+- Implement environment variables.
+- Implement command substitution foundations.
+- Implement scripting.
+- Implement startup scripts.
+- Implement background processes.
+
+Check this mark when done [] 
+
+
+### **Verification**
+
+- Test editor persistence.
+- Test multiple terminal sessions.
+- Test concurrent processes.
+- Test shell pipeline stress.
+
+Check this mark when done [] 
+
+
+# **Phase 2 — Advanced storage and filesystem reliability**
+
+**Goal:** Build storage infrastructure suitable for a general-purpose OS.
+
+Check this mark when done [] 
+
+
+### **PCIe**
+
+
+- Implement PCIe ECAM discovery.
+- Parse ACPI MCFG.
+- Implement MSI.
+- Implement MSI-X.
+- Support device interrupt routing.
+
+Check this mark when done [] 
+
+
+### **NVMe**
+
+- Implement NVMe controller discovery.
+- Implement admin queues.
+- Implement I/O submission queues.
+- Implement completion queues.
+- Implement DMA-backed queue memory.
+- Implement multi-queue support.
+- Implement interrupt-driven completions.
+
+Check this mark when done [] 
+
+
+### **Native filesystem**
+
+- Define the PDC native filesystem specification.
+- Implement inode management.
+- Implement directories.
+- Implement metadata persistence.
+- Implement journaling or copy-on-write.
+- Implement checksums.
+- Implement crash recovery.
+- Implement filesystem consistency checking.
+- Implement mount and recovery tools.
+
+Check this mark when done [] 
+
+
+### **Cache and storage management**
+
+- Implement a scalable block cache.
+- Implement a VFS page cache.
+- Implement read-ahead.
+- Implement writeback.
+- Implement flush barriers.
+- Implement storage health diagnostics.
+
+**Important:** Your initial FAT32 support should remain useful as an interoperability filesystem. The native filesystem should not make external disk access unnecessarily difficult.
+
+Check this mark when done [] 
+
+
+# **Phase 3 — USB and peripheral ecosystem**
+
+**Goal:** Support ordinary consumer peripherals.
+
+Check this mark when done [] 
+
+
+### **USB core**
+
+- Implement xHCI controller discovery.
+- Implement command rings.
+- Implement event rings.
+- Implement transfer rings.
+- Implement device enumeration.
+- Implement hub traversal.
+- Implement hotplug detection.
+- Implement USB device removal and cleanup.
+
+Check this mark when done [] 
+
+
+### **USB classes**
+
+- USB HID keyboards.
+- USB HID mice.
+- USB game controllers.
+- USB mass storage BOT.
+- USB mass storage UAS.
+- USB Ethernet adapters.
+
+Check this mark when done [] 
+
+
+### **Audio**
+
+- Implement Intel HDA.
+- Implement VirtIO-Sound.
+- Implement DMA audio buffers.
+- Implement audio-device enumeration.
+- Implement PCM streams.
+- Implement userspace audio mixing service.
+- Implement volume and device management.
+
+Check this mark when done [] 
+
+
+### **Verification**
+
+- Test hotplugging.
+- Test multiple USB devices.
+- Test USB storage persistence.
+- Test audio playback.
+- Test device removal during operation.
+
+Check this mark when done [] 
+
+
+# **Phase 4 — Graphical desktop**
+
+**Goal:** Give PDC-OS a complete graphical desktop environment.
+
+[New Spec, Omarchy, and 7 more themes • Dracula Theme](https://images.openai.com/static-rsc-4/tT7vadAB_B3kxhUreOR3RHhSuMJ3SdOAiOCt6JXHm66y2ZN2LN0bTiFtnYYt7JotMxYiNW6LSR0fPI0giT9iTyVRTWmizdPrsL2ickwejea03YvN9K5AmNaC1uHMvi_gkR2K3OctbSWdN_Z7kuZ9fDRdyV0Ft4z1_NAuvbBmPxM?purpose=inline)
+
+[Waydir - Keyboard-Driven Dual-Pane File Manager](https://images.openai.com/static-rsc-4/9brI0Ft1ow6yLgAEw6jsQD_cXRl5KhIoAWzcco2b02l3KWm96N4Z64u2_aG9HYmcf7QZqGCIEPRAMQ9QMPS1yLtlZfghGMQYYZJgSqLyihtQM-FmRm_sFH2zYvoGsdmHhBfiX4shmO-N_gGChL1dv8wVvecE-rlVQcydWxzXDVA?purpose=inline)
+
+[Resources – GNOME 应用](https://images.openai.com/static-rsc-4/UgVo6rJLJ6x7c-yQ_joC2alkI0HgwgIs1Uqfbj6AUShvzoy6o2fsguagZk3bA-12XjCYzWiASzYmwie2WUvNJe4huSAi-YGkNM1ZlVTKYxl2Q5nJjukNhL2FQeKHGfOU7kCZy_IcIg3HhegtYq3v8kde-72HIYZonL0V-A5_TUk?purpose=inline)
+
+[Screenshots · Issue #1395 · awesomeWM/awesome · GitHub](https://images.openai.com/static-rsc-4/KCMo9dbKUYZWMj7O2yHvgtrvkRNpRKsX1omhi6CO1kWCgvFPrtfYXtpUy2lbAKyQQCQbr7gJmIwDUzpg873-Wcg_ZuXg7oGrbmFVLaWPkcH4bPjZu0_1NUWETmohzyEpY9TxoSvpusLSljnsOc79eOqge_ybXDzo9Y7_1-7OfAU?purpose=inline)
+
+[Omarchy Themes - A comprehensive collection of themes for Omarchy](https://images.openai.com/static-rsc-4/w2XuczIgwP5UzfFU9D8_O_rDxx5msHZs7NUAH4DQlrt5WdBiG76UKzodRPp56tpuSWvGBartAmuNEX_GLP5wA0cL569DfYC3Htl30CotJe0L0cktnDkfiX_d4B6nYQxxNJLcPlxJvo1aLBW1CZuHWIVGH8B8TY5nKDm1wRfkAO8?purpose=inline)
+
+[Web Weekly #132](https://images.openai.com/static-rsc-4/FGxbXX8RlrxfdBYSVuJUkYCNVfL4gPncJQhKmClg-nRXbfmDhtyFUmY2-7fVqXebeSzYgDuFsyNLaMh75SEhHFbD5Zlde37WObx4GrMc-tKW12je0BKHEaSpAJs1WiqM5CJ2RRx31ormbAmmlbt0WF3l8gHmZd6jSUZC0SQxOYc?purpose=inline)
+
+[Modern Desktop Suite | Dank Linux](https://images.openai.com/static-rsc-4/4DHZ-f-FFskzLoGZPriQmr0G5-nE9eRoMTmnH_txskfr2Z0fYmQsrm3pGEzgbVyUK0uRI0IWwx8gh6rgqQzgBTpI5CXaztPbUj25O-BAY_wQw-xksexMe9eUZY1GwRJHF5hvJKMfMxKu690oNhdm2-WKN5voqDPz84ehnQaFL40?purpose=inline)
+
+[Um Arch Linux Nórdico - Minha Personalização - Diolinux Plus](https://images.openai.com/static-rsc-4/HFs6UOmomfBTNWHF6NobOGmkTsyjtOY1RLUy4NIkRwB9E2FvqefLJB9H2RQABjs8oc4drxUekFVFt49YC42amQsVvprPh5X5opGfiDlEVVAd5liO6GWt0DiygblETEWjL6FUaU-b7cozadpwZdpjLfjv9LuO3JvO71yjuq_u9iI?purpose=inline)
+
+[Installing BSPWM on Debian. How to install and setup BSPWM, a… | by Rphlm | Tech notes and Geek stuff | Medium](https://images.openai.com/static-rsc-4/CLo-jmoo1BFN1YVquOxNXTTyFPEfuF9BDQOdtmJJLXUvvEzkOrvcQ8EFjgEmNG-FbI_WmdyCaDvGpSUonf_q2H1DWLLwwQCsd7uC_zVtT7qIgUumh0abr5SS8Iy9qhiFTNwdVfVV0vKmGX4iOLwwq-gqxXnTg15KZga1WEOtsDY?purpose=inline)
+
+[rovr - A post-modern terminal file manager. - Terminal Trove](https://images.openai.com/static-rsc-4/psnJjTQ2_OQXP7CSd2Lw_hcgktivQohTL_apvA0JwrtzXoD8ftsWLd_Gj_AHDd00vhRmK2CpMYvgERJN1qbmaZzJONYyYou2R7twEZNXGBlk97ZuYtzy0yOiTvfrrkfrfS8emXFuIMtaZmiy1NnaveWHDwTKZ4OJora7S4M3D50?purpose=inline)
+
+[Archcraft es otra estúpida y sensual distro Linux minimalista basada en Arch que luce simplemente fenomenal](https://images.openai.com/static-rsc-4/g1IldPHWwwOpkUc2PJEY7b__wUiTr4oiL2KPuxmi43boG8-5n7GiDkb0-HwMFQZ6v3PEnhf3dhbB0QRX7WQF_k7EVr-g65sANk0WlH3jYPjbAC7dZ5pgWcqLmkjeXw-kVsXMeZW9Uq2smzmUd1R_QO1DfXqYeni3fycJXVAy7_Y?purpose=inline)
+
+[Обзор игрового ноутбука Maibenben Typhoon X16A на базе AMD Ryzen 7 7435 и Nvidia GeForce RTX 4060 Laptop](https://images.openai.com/static-rsc-4/Vzw3u8fODsv4CnqFC3FIKTVCTLBA6OqEN6J6iqPc-dUuB7ZfWQVx16IoJF9aL37wJNMB55tmOcv5h_wIgiYlu4_In_YOBNnwVgHVQbfeRT9HDRsBHBgaWx9y4m9cgGRicdVrgRUO4HQs-W78DrqOdrdHLIEcHWfY6t8Q9v51gro?purpose=inline)
+
+[i3wm Premium - Aditya Shakya's Ko-fi Shop](https://images.openai.com/static-rsc-4/BrP29bfQeNBNrKsTuhOd6aXTsg8MOhvsEf3_7QdXhHkH7N8KRcurBXw5L30L0C3AgLM7NsY5XH4nEFL9cTtAntoUHjnrDA2v5P6bfnoqKj_End1Br7UbLdXANoArq-WxineBsagv-DM4Ev-yy8vaHQrbLbw2qqcifVoK38yJl0g?purpose=inline)
+
+[dotfiles | 📦 Simple yet powerful cross-platform dotfiles. Easily setup the intuitive Ubuntu Desktop, Linux server (Ubuntu/Fedora/Arch Linux), macOS, and Termux.](https://images.openai.com/static-rsc-4/lrmLbUxQ-6WtWFHO02OXpH8jA-Gkmt5E6Yye5rLSDHYEXQ8r2jB7RpK-O-kKI4jjvT6zpi-OiGq9hbAELSj_C6t2NVF1j4oZeP19--riN3EyRvtBt5kcevIpwhDuYJBUN0DRMucDfB58COTrhaHCRpAZVCe79pXnemzM1hBdb9w?purpose=inline)
+
+[System Monitor Pro - Cross-Platform System Monitoring Tool](https://images.openai.com/static-rsc-4/anUnZXXswR6QeRC7IrWtAq0l3w6ilU68C-I8BjG-SnJQSRt0VaPjL9EwIvZMInpLYXq4om301U0N4dmvnpqntP10k55ZbFNZ2qi3DNmQe4I8ikft4VrCeJDRpEeDGZD4tGvEACYfNm5iRxfPT8INu3e5PDnfNOpwa1sIz61Spas?purpose=inline)
+
+Check this mark when done [] 
+
+
+### **Input subsystem**
+
+- Implement unified keyboard input.
+- Implement mouse input.
+- Implement pointer events.
+- Implement input event queues.
+- Expose input devices through `/dev/input`.
+
+Check this mark when done [] 
+
+
+### **Graphics foundation**
+
+- Implement linear framebuffer.
+- Implement double buffering.
+- Implement pixel surfaces.
+- Implement shared-memory surfaces.
+- Implement dirty rectangles.
+- Implement font rendering.
+- Implement image decoding.
+
+Check this mark when done [] 
+
+
+### **Window compositor**
+
+- Implement userspace compositor.
+- Implement window creation/destruction.
+- Implement window positioning.
+- Implement focus management.
+- Implement window decorations.
+- Implement resizing.
+- Implement inter-process surface sharing.
+- Implement IPC-based window management.
+
+Check this mark when done [] 
+
+
+### **Core desktop applications**
+
+- Terminal emulator.
+- File manager.
+- System monitor.
+- Settings application.
+- Text editor.
+- Application launcher.
+- Package manager frontend.
+
+Check this mark when done [] 
+
+
+### **Verification**
+
+- Test multiple simultaneous windows.
+- Test surface isolation.
+- Test compositor crashes.
+- Test input focus.
+- Test framebuffer fallback.
+
+**Architectural rule:** The compositor should be a userspace process. The kernel should provide memory, device access, and display primitives, not window-management policy.
+
+Check this mark when done [] 
+
+
+# **Phase 5 — GPU acceleration and modern graphics**
+
+**Goal:** Move beyond CPU-only rendering.
+
+Check this mark when done [] 
+
+
+### **Graphics drivers**
+
+- Establish GPU device abstraction.
+- Implement VirtIO-GPU.
+- Implement display mode setting.
+- Implement page flipping.
+- Implement VSync.
+- Implement GPU memory management.
+- Implement command submission.
+- Implement synchronization primitives.
+
+Check this mark when done [] 
+
+
+### **Advanced graphics**
+
+- Implement DRM/KMS-inspired interfaces.
+- Implement shared DMA buffers.
+- Implement accelerated compositing.
+- Implement alpha blending.
+- Implement vector graphics.
+- Implement TrueType/OpenType rasterization.
+- Investigate Intel graphics support.
+- Investigate VirGL/Venus support.
+
+I'd avoid making proprietary GPU support a requirement for the initial desktop. Software rendering and VirtIO-GPU provide a much more manageable starting point.
+
+Check this mark when done [] 
+
+
+# **Phase 6 — POSIX compatibility and software ecosystem**
+
+**Goal:** Run existing software without rewriting every application.
+
+
+Check this mark when done [] 
+
+
+### **POSIX interface**
+
+
+- Implement `mmap`.
+- Implement `munmap`.
+- Implement `poll`.
+- Implement `select`.
+- Implement `fcntl`.
+- Implement `dup2`.
+- Implement `stat`.
+- Implement `readdir`.
+- Implement `nanosleep`.
+- Implement process signals.
+- Implement `SIGINT`, `SIGCHLD`, `SIGPIPE`.
+- Implement `sigaction`.
+
+Check this mark when done [] 
+
+
+### **Standard filesystems**
+
+- Implement `/dev/null`.
+- Implement `/dev/zero`.
+- Implement `/dev/urandom`.
+- Implement `/dev/tty`.
+- Implement `/proc`.
+- Implement `/proc/meminfo`.
+- Implement `/proc/uptime`.
+- Implement `/proc/<pid>`.
+
+Check this mark when done [] 
+
+
+### **C ecosystem**
+
+- Port musl libc.
+- Implement the PDC C runtime integration.
+- Implement ELF64 compatibility.
+- Implement static linking.
+- Implement dynamic linking.
+- Implement shared libraries.
+- Implement `ld-pdcos.so`.
+
+Check this mark when done [] 
+
+
+### **Software**
+
+- Port coreutils.
+- Port a POSIX shell.
+- Port Vim or Nano.
+- Port Lua.
+- Investigate Python.
+- Port curl.
+- Establish cross-compilation toolchains.
+
+**Important design decision:** PDE remains the native executable format. ELF compatibility is an additional loader/toolchain path. You should not force every existing open-source project to adopt PDE.
+
+Check this mark when done [] 
+
+
+# **Phase 7 — Native development and self-hosting**
+
+**Goal:** Make PDC-OS capable of developing PDC-OS.
+
+Check this mark when done [] 
+
+
+### **Development tools**
+
+- Implement PDC SDK.
+- Implement assembler.
+- Implement linker.
+- Implement build system.
+- Implement package development tools.
+- Implement source-control integration.
+- Implement debugging tools.
+- Implement symbol inspection.
+
+Check this mark when done [] 
+
+
+### **Native Rust support**
+
+- Define `x86_64-unknown-pdcos`.
+- Define the Rust target specification.
+- Implement Rust target integration.
+- Implement `std` platform support.
+- Implement filesystem integration.
+- Implement networking integration.
+- Implement thread integration.
+- Port LLVM/LLD.
+- Port rustc and Cargo, or establish an equivalent bootstrap toolchain.
+
+Check this mark when done [] 
+
+
+### **Self-hosting**
+
+- Clone PDC-OS source inside PDC-OS.
+- Build userspace applications natively.
+- Build the kernel natively.
+- Run the kernel test suite natively.
+- Implement reproducible native builds.
+- Verify host/native artifact consistency.
+
+A small native compiler or interpreter is a good early milestone, but it shouldn't be confused with full Rust self-hosting.
+
+Check this mark when done [] 
+
+
+# **Phase 8 — True SMP and multicore execution**
+
+**Goal:** Run PDC-OS genuinely in parallel.
+
+Check this mark when done [] 
+
+
+### **CPU initialization**
+
+- Parse MADT processor entries.
+- Enumerate APIC IDs.
+- Implement AP startup trampoline.
+- Implement INIT/SIPI/SIPI.
+- Initialize per-CPU GDT.
+- Initialize per-CPU IDT/TSS.
+- Establish per-CPU kernel stacks.
+- Establish CPU-local storage through GS.
+
+Check this mark when done [] 
+
+
+### **Scheduler**
+
+- Implement per-CPU run queues.
+- Implement CPU affinity.
+- Implement task migration.
+- Implement work stealing.
+- Implement idle CPU handling.
+- Implement inter-processor interrupts.
+
+Check this mark when done [] 
+
+
+### **Memory and synchronization**
+
+- Implement TLB shootdowns.
+- Implement atomic synchronization primitives.
+- Introduce scalable spinlocks.
+- Implement mutexes and condition variables.
+- Implement lock-order validation.
+- Audit global shared structures.
+- Eliminate unnecessary global locks.
+
+Check this mark when done [] 
+
+
+### **Verification**
+
+
+- Test 2-core scheduling.
+- Test 4-core scheduling.
+- Test concurrent filesystem access.
+- Test concurrent networking.
+- Test allocator stress.
+- Test TLB shootdowns.
+- Test repeated thread migration.
+
+Note that 0.6 prepares for SMP; this phase implements actual parallel execution.
+
+Check this mark when done [] 
+
+
+# **Phase 9 — Virtualization**
+
+**Goal:** Run virtual machines inside PDC-OS.
+
+Check this mark when done [] 
+
+
+### **Hardware virtualization**
+
+- Detect Intel VT-x.
+- Detect AMD-V.
+- Implement VMX initialization.
+- Implement SVM initialization.
+- Implement VMCS/VMCB management.
+- Implement EPT/NPT.
+- Implement virtual CPU execution.
+- Implement virtual interrupt delivery.
+
+Check this mark when done [] 
+
+
+### **Userspace VMM**
+
+- Implement VM management API.
+- Implement virtual serial devices.
+- Implement virtual block devices.
+- Implement VirtIO networking.
+- Implement virtual memory management.
+- Implement VM snapshots.
+- Implement VM lifecycle management.
+
+Check this mark when done [] 
+
+
+# **Phase 10 — Containers and capability security**
+
+**Goal:** Provide strong application isolation and controlled resource sharing.
+
+Check this mark when done [] 
+
+
+### **Namespaces**
+
+- PID namespaces.
+- Mount namespaces.
+- Network namespaces.
+- IPC namespaces.
+- User namespaces.
+
+Check this mark when done [] 
+
+
+### **Resource management**
+
+- CPU quotas.
+- Memory limits.
+- Process limits.
+- I/O limits.
+- Per-container networking.
+- Resource accounting.
+
+Check this mark when done [] 
+
+
+### **Security**
+
+- Implement object capabilities.
+- Introduce capability-based resource access.
+- Implement syscall filtering.
+- Implement verified security policies.
+- Introduce seccomp-like filtering.
+- Add sandbox profiles.
+- Test privilege escalation boundaries.
+
+I'd make capabilities the long-term security model rather than simply expanding root/non-root checks indefinitely.
+
+Check this mark when done [] 
+
+
+# **Phase 11 — Multi-architecture portability**
+
+**Goal:** Run the same PDC-OS kernel architecture on different CPU families.
+
+Check this mark when done [] 
+
+
+### **AArch64**
+
+- Implement AArch64 boot.
+- Implement exception levels.
+- Implement page-table management.
+- Implement context switching.
+- Implement GIC support.
+- Implement timers.
+- Implement device-tree discovery.
+- Implement userspace transitions.
+
+Check this mark when done [] 
+
+
+### **RISC-V 64**
+
+- Implement RISC-V boot.
+- Implement privilege modes.
+- Implement Sv39/Sv48 paging.
+- Implement context switching.
+- Implement PLIC.
+- Implement CLINT or platform timer support.
+- Implement device-tree discovery.
+- Implement userspace transitions.
+
+Check this mark when done [] 
+
+
+### **Verification**
+
+- Cross-architecture build pipeline.
+- QEMU x86-64 boot tests.
+- QEMU AArch64 boot tests.
+- QEMU RISC-V boot tests.
+- Architecture-independent subsystem tests.
+- PDE architecture compatibility tests.
+
+The important requirement is that architecture-specific code stays behind the HAL. A `Platform` interface should be designed around actual kernel operations, not one enormous trait containing every hardware feature.
+
+Check this mark when done [] 
+
+
+# **Phase 12 — Advanced networking and security**
+
+**Goal:** Make PDC-OS a modern network-capable desktop and server OS.
+
+Check this mark when done [] 
+
+
+### **IPv6**
+
+- Implement IPv6.
+- Implement ICMPv6.
+- Implement Neighbor Discovery.
+- Implement SLAAC.
+- Implement DHCPv6.
+- Implement dual-stack sockets.
+
+Check this mark when done [] 
+
+
+### **Advanced packet processing**
+
+- Introduce packet-buffer chains.
+- Implement zero-copy paths where beneficial.
+- Implement segmentation offload interfaces.
+- Implement advanced socket buffering.
+- Implement multicast.
+- Implement network performance monitoring.
+
+Check this mark when done [] 
+
+
+### **VPN and firewall**
+
+- Implement stateful firewall.
+- Implement NAT.
+- Implement port forwarding.
+- Implement WireGuard.
+- Implement ChaCha20-Poly1305.
+- Implement Curve25519.
+- Implement network policy management.
+
+These cryptographic implementations should use established, audited libraries wherever possible rather than home-grown cryptography.
+
+Check this mark when done [] 
+
+
+# **Phase 13 — Distributed services**
+
+**Goal:** Extend PDC-OS beyond a single machine.
+
+Check this mark when done [] 
+
+
+### **Network-transparent filesystem**
+
+- Implement 9P2000 or a documented PDC remote filesystem protocol.
+- Implement remote mount support.
+- Implement authenticated connections.
+- Implement remote file operations.
+- Implement connection recovery.
+- Implement remote resource caching.
+
+Check this mark when done [] 
+
+
+### **Distributed processes**
+
+- Implement node discovery.
+- Implement remote service registration.
+- Implement remote process execution.
+- Forward process output.
+- Forward signals.
+- Implement remote resource accounting.
+- Implement distributed service monitoring.
+
+I'd keep the local kernel monolithic. Distributed services should not require turning the kernel into a network-dependent distributed microkernel.
+
+Check this mark when done [] 
+
+
+# **Phase 14 — Advanced reliability and observability**
+
+**Goal:** Make PDC-OS diagnosable, recoverable, and maintainable.
+
+Check this mark when done [] 
+
+
+### **Crash handling**
+
+- Implement persistent crash dumps.
+- Implement symbolized backtraces.
+- Implement kernel crash logs.
+- Implement crash-dump compression.
+- Implement post-crash inspection tools.
+- Implement panic recovery policies where safe.
+
+Check this mark when done [] 
+
+
+### **Performance**
+
+- Implement hardware PMU support.
+- Implement CPU profiling.
+- Generate flamegraphs.
+- Implement allocation profiling.
+- Implement scheduler tracing.
+- Implement I/O tracing.
+- Implement latency histograms.
+
+Check this mark when done [] 
+
+
+### **Live maintenance**
+
+- Investigate kernel live patching.
+- Implement safe patch validation.
+- Implement atomic patch application.
+- Implement patch rollback.
+- Investigate deterministic record/replay.
+- Record external interrupt and I/O inputs for replay.
+
+Live patching and deterministic replay are advanced research projects, not 
+prerequisites for a reliable general-purpose OS.
+
+
+Check this mark when done [] 
+
+
+
+# **Phase 15 — Formal verification and continuous assurance**
+
+**Goal:** Establish rigorous confidence in the kernel's most critical invariants.
+
+Check this mark when done [] 
+
+
+### **Formal methods**
+
+- Identify critical unsafe Rust regions.
+- Formally model allocator invariants.
+- Verify page-table operations.
+- Verify synchronization primitives.
+- Verify syscall pointer validation.
+- Investigate Kani.
+- Investigate Verus.
+- Document proof assumptions and limitations.
+
+Check this mark when done [] 
+
+
+### **Automated testing**
+
+- Implement continuous syscall fuzzing.
+- Implement filesystem fuzzing.
+- Implement executable-format fuzzing.
+- Implement network-protocol fuzzing.
+- Implement kernel memory stress tests.
+- Implement SMP race testing.
+- Integrate coverage reporting.
+- Automate regression testing.
+
+Check this mark when done [] 
+
+
+### **Self-tuning**
+
+- Collect scheduler workload statistics.
+- Collect memory-allocation telemetry.
+- Collect storage latency metrics.
+- Collect network performance metrics.
+- Investigate adaptive scheduling.
+- Investigate cache tuning.
+- Validate automatic tuning against fixed baselines.
+
+I would not make the kernel autonomously modify its own critical scheduling or memory policies without explicit bounds and rollback mechanisms.
+
+Check this mark when done [] 
+
+
+# **5. Original roadmap cross-reference**
+
+For clarity, here's how your original 20 phases map into the revised roadmap.
+
+| Original phase                    | Revised destination     |
+| --------------------------------- | ----------------------- |
+| 1. Persistent filesystem          | 0.4                     |
+| 2. Terminal and editor            | 0.4 + Post-0.6 Phase 1  |
+| 3. PCI and networking             | 0.4 + 0.5               |
+| 4. TLS                            | 0.5                     |
+| 5. ACPI, AHCI, framebuffer        | 0.6                     |
+| 6. Processes and self-hosting     | 0.3, 0.5, 0.6 + Phase 7 |
+| 7. SMP                            | Post-0.6 Phase 8        |
+| 8. Graphical desktop              | Post-0.6 Phase 4        |
+| 9. POSIX                          | Post-0.6 Phase 6        |
+| 10. Native Rust                   | Post-0.6 Phase 7        |
+| 11. NVMe and journaling           | Post-0.6 Phase 2        |
+| 12. USB and audio                 | Post-0.6 Phase 3        |
+| 13. GPU acceleration              | Post-0.6 Phase 5        |
+| 14. Virtualization                | Post-0.6 Phase 9        |
+| 15. Containers                    | Post-0.6 Phase 10       |
+| 16. Multi-architecture            | Post-0.6 Phase 11       |
+| 17. Advanced networking           | Post-0.6 Phase 12       |
+| 18. Distributed services          | Post-0.6 Phase 13       |
+| 19. Reliability and live patching | Post-0.6 Phase 14       |
+| 20. Formal verification           | Post-0.6 Phase 15       |
+
+Nothing is being abandoned. Some work has simply moved earlier or later to respect dependencies.
+
+Check this mark when done [] 
+
+
+# **6. Important architectural corrections**
+
+There are a few things I particularly want to emphasize before you start implementing this.
+
+| Original approach                                 | Revised approach                                            |
+| ------------------------------------------------- | ----------------------------------------------------------- |
+| Implement networking before process isolation     | Establish safe process isolation first                      |
+| Implement editor inside kernel userspace registry | Make it a standalone application                            |
+| Use ELF as the primary loader                     | PDE native, ELF compatibility                               |
+| Build AHCI directly into storage                  | Block-device abstraction first                              |
+| Treat TSC jitter as entropy                       | Proper CSPRNG and entropy subsystem                         |
+| Make SMP a scheduler feature                      | Treat it as CPU, memory, interrupt and synchronization work |
+| Implement GUI in the kernel                       | Userspace compositor                                        |
+| Implement all POSIX functionality at once         | Incremental compatibility layer                             |
+| Make native Rust depend on full self-hosting      | Bootstrap toolchain first                                   |
+| Add multiple architectures late in implementation | Keep HAL boundaries from the beginning                      |
+
+Check this mark when done [] 
+
+
+## **A particularly important filesystem decision**
+
+I would actually maintain three filesystem categories:
+
+1. **RAMFS:** Early boot, temporary files, recovery.
+2. **FAT32:** Removable media and interoperability.
+3. **PDCFS:** Native persistent filesystem, eventually supporting journaling or copy-on-write.
+
+This gives PDC-OS flexibility without forcing one filesystem to satisfy every use case.
+
+Check this mark when done [] 
+
+
+## **A particularly important executable decision**
+
+I would establish these as separate specifications:
+
+**PDE — PDC Executable**
+
+Binary representation, segments, relocations, architecture and loading.
+
+**PDC ABI**
+
+Syscalls, register conventions, process semantics and kernel interaction.
+
+**PDC Runtime**
+
+Standard libraries, threading, file access, networking and application services.
+
+**PDC SDK**
+
+Compiler integration, assembler, linker, debugging and development tools.
+
+That separation is fundamental to maintaining a stable software ecosystem.
+
+Check this mark when done [] 
+
+
+# **7. The actual development order**
+
+One thing I don't want is for you to work on 15 major subsystems simultaneously.
+
+I'd use this dependency-driven sequence:
+
+Check this mark when done [] 
+
+
+## **PDC-OS development progression**
+
+1. **0.1–0.2: Stabilize**
+
+   Make the kernel internally coherent.
+2. **0.3: Protect**
+
+   Establish real userspace execution and isolation.
+3. **0.4: Persist**
+
+   Give the OS reliable storage and hardware discovery.
+4. **0.5: Connect**
+
+   Establish native applications and internet access.
+5. **0.6: Consolidate**
+
+   Make a complete general-purpose kernel foundation.
+6. **Post-0.6 Phases 1–7: Become usable**
+
+   Text environment, storage, peripherals, desktop, POSIX and development tools.
+7. **Phases 8–11: Become scalable**
+
+   SMP, virtualization, containers and other architectures.
+8. **Phases 12–15: Become advanced**
+
+   Modern networking, distributed services, reliability and formal assurance.
+
+Check this mark when done [] 
+
+
+# **8. Project-wide engineering standards**
+
+I'd establish a few permanent rules for the repository.
+
+**Every release should have:**
+
+- Versioned architecture documentation.
+- Versioned ABI documentation.
+- Build manifest.
+- Reproducible build verification.
+- Automated QEMU boot tests.
+- Hardware profile testing.
+- Regression testing.
+- Security review.
+- Performance measurements.
+- Changelog.
+- Known limitations.
+- Upgrade/migration notes where applicable.
+
+**Every subsystem should have:**
+
+- Defined public interface.
+- Defined internal ownership.
+- Initialization and shutdown behavior.
+- Error handling.
+- Resource exhaustion handling.
+- Cleanup procedures.
+- Unit or integration tests.
+- Documentation.
+
+I'd also introduce a `docs/architecture/` directory containing individual specifications, rather than letting the main README become a massive document.
+
+Suggested documents:
+
+```
+docs/
+├── architecture/
+│   ├── overview.md
+│   ├── boot.md
+│   ├── memory.md
+│   ├── scheduling.md
+│   ├── processes.md
+│   ├── address-spaces.md
+│   ├── interrupts.md
+│   ├── drivers.md
+│   ├── storage.md
+│   ├── networking.md
+│   ├── security.md
+│   └── multiarch.md
+│
+├── abi/
+│   ├── syscall.md
+│   ├── process.md
+│   └── filesystem.md
+│
+├── formats/
+│   ├── pde-v1.md
+│   └── pdcfs-v1.md
+│
+├── development/
+│   ├── building.md
+│   ├── testing.md
+│   └── debugging.md
+│
+└── releases/
+```
+
+Check this mark when done [] 
+
+
+# **9. My final recommendation: freeze the architecture, not the implementation**
+
+I want you to take something away from this entire design:
+
+**PDC-OS should be designed as a platform from 0.2.0 onward, even if its actual capabilities are still very limited.**
+
+You don't need to implement USB, GPU acceleration, virtualization, or AArch64 in the first year.
+
+But you should avoid architectural decisions that make those features unnecessarily difficult.
+
+I'd also make one distinction in your long-term ambitions:
+
+- A **complete general-purpose OS** is the primary product goal.
+- A **self-hosting OS** is a major engineering milestone.
+- A **multi-architecture OS** is a portability milestone.
+- A **distributed OS environment** is an advanced extension.
+
+Those are related, but none should be a prerequisite for the others.
+
+# **PDC-OS engineering north star**
+
+**A modular, monolithic, multi-architecture operating system with a native executable ecosystem, protected userspace, scalable hardware support, and a complete general-purpose desktop and development environment.**
+
+Built incrementally. Tested continuously. Documented thoroughly. Designed to expand without architectural reinvention.
+

@@ -1,0 +1,20 @@
+[package]
+# Package metadata used by Cargo and the produced static library name.
+name = "pdc_os"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+# Link the Rust kernel as a static library alongside the NASM bootstrap objects.
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[profile.dev]
+# Kernel panics cannot unwind without a hosted runtime.
+panic = "abort"
+
+[profile.release]
+# Keep release panic behavior consistent with the freestanding dev profile.
+panic = "abort"
+# Strip symbols from the release artifact to reduce its size.
+strip = true

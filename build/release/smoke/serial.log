@@ -1,0 +1,26 @@
+PDC-OS boot: entering x86-64 kernel
+PDC-OS boot stage: serial
+PDC-OS kernel entry
+PDC-OS boot stage: cpu
+Hardware: CPU vendor=AuthenticAMD PAE=yes long-mode=yes COM1=ready
+Hardware: interrupt-controller=legacy-PIC ATA=auto-detect PS/2=auto-detect
+Display mode: VGA text (80x25), framebuffer disabled
+Initializing memory and scheduler
+PDC-OS boot stage: memory
+PDC-OS boot stage: scheduler
+PDC-OS boot stage: filesystem
+PDC-OS initialization failure: device=ATA primary-master error=not-present stage=filesystem
+Storage: ATA primary-master=unsupported mount=none
+PDC-OS boot stage: userspace
+PDC-OS userspace startup complete
+Security review: 10.7 cases=12 passed=12 failures=0
+Memory: usable=260992 KiB allocated=8 KiB map-regions=7
+Memory and scheduler initialized
+PDC-OS boot stage: interrupts
+PIT initialization complete: channel0=~1000Hz
+PS/2 keyboard initialization complete
+Interrupts and PIT initialized
+PDC-OS boot stage: terminal
+Performance: context-switches=2 irq-events=2 syscalls=0 disk-hits=0 disk-misses=13 serial-bytes=903 vga-bytes=16 frame-allocs=2 frame-reclaims=0 page-switches=0
+PDC-OS boot complete
+PDC-OS boot stage: complete

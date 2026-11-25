@@ -1,0 +1,401 @@
+# PDC-OS Kernel and Operating-System Summary
+
+This note summarizes the design that exists in the PDC-OS source tree at
+version 0.1.0.  It is intentionally implementation-focused.  Long-range ideas
+in `path_onward` are not described as implemented features.
+
+## 1. System Identity and Shape
+
+PDC-OS is a freestanding, 64-bit, monolithic x86-64 kernel prototype with a
+small in-kernel shell.  Rust provides the subsystem implementations, while
+NASM supplies the Multiboot bootstrap and interrupt-stub assembly.
+
+The project uses:
+
+- no hosted Rust standard library;
+- static, fixed-capacity kernel structures where practical;
+- `#![no_std]` and `panic = "abort"`;
+- a 64 MiB bootstrap identity map;
+- IRQ-safe `IrqLock` protection for kernel shared state;
+- a single-address-supervisor design in the current booted system;
+- COM1 serial output and a VGA/framebuffer console for diagnostics.
+
+The kernel is a prototype platform rather than a complete POSIX system.  It
+already has separate boot, memory, scheduler, interrupt, filesystem,
+userspace, security, recovery, and performance subsystems, but several of these
+are intentionally bounded implementations that establish interfaces for future
+growth.
+
+## 2. Repository Layout
+
+- `arch/x86/boot.asm`: 32-bit to 64-bit bootstrap, page tables, GDT, and COM1.
+- `arch/x86/interrupts.asm`: assembly interrupt, exception, and syscall stubs.
+- `src/lib.rs`: kernel entry point, console writer, boot sequencing, and panic
+  handler.
+- `src/memory.rs`: physical frame allocator, kernel heap, paging, address
+  spaces, and ELF mapping support.
+- `src/scheduler.rs`: fixed-table round-robin task scheduler and interrupt
+  frame context switching.
+- `src/interrupts.rs`: IDT, PIC remapping, PIT, exceptions, IRQ dispatch,
+  and `int 0x80` syscall delivery.
+- `src/drivers.rs`: PIT, VGA, linear framebuffer, ATA PIO, and port-I/O device
+  primitives.
+- `src/fs.rs`: RAM filesystem, VFS, mount table, and fixed disk cache.
+- `src/os/terminal.rs`: bounded interactive line editor, history, prompt,
+  cursor editing, and foreground-console routing.
+- `src/os/keyboard.rs`: PS/2 set-1 decoding, modifiers, key queue, layouts,
+  and diagnostics.
+- `src/os/commands.rs`: built-in shell commands and shell dispatch.
+- `src/os/syscalls.rs`: process table and syscall ABI.
+- `src/os/services.rs`: users, IPC, signals, and shared resources.
+- `src/os/userspace.rs`: startup configuration, shell process, and program
+  registry.
+- `src/hardware.rs`: CPU feature and vendor detection.
+- `src/serial.rs`: COM1 output.
+- `src/recovery.rs`: boot stages, initialization failures, reboot, shutdown,
+  halt, and panic context.
+- `src/performance.rs`: scheduler, IRQ, syscall, cache, I/O, and memory metrics.
+- `src/security.rs`: bounded adversarial checks.
+- `Makefile` and `scripts/`: build, hardware profiles, smoke testing, release,
+  verification, and QEMU workflows.
+
+## 3. Bootstrap and Boot Sequence
+
+GRUB enters `arch/x86/boot.asm` with a Multiboot v1 payload and requests a
+512x512 32-bit linear framebuffer.
+
+The assembly bootstrap:
+
+1. initializes COM1 for early serial diagnostics;
+2. verifies PAE and 64-bit long-mode support;
+3. clears bootstrap PML4, PDPT, and page-directory structures;
+4. identity maps the first 64 MiB using 2 MiB pages;
+5. maps the bootloader framebuffer at the fixed 1 GiB kernel alias;
+6. enables PAE and paging, loads the GDT, and enters 64-bit mode;
+7. installs a 64 KiB bootstrap stack and calls `kernel_main`.
+
+The kernel entry point initializes subsystems in this order:
+
+1. COM1 and serial stage tracking;
+2. CPU detection;
+3. display initialization with VGA text fallback;
+4. memory allocation;
+5. initial scheduler tasks;
+6. kernel services and syscall table;
+7. filesystem and userspace startup;
+8. bounded security review;
+9. interrupts, PIT, and PS/2 keyboard;
+10. terminal banner and prompt;
+11. performance snapshot and boot-complete marker;
+12. a halt loop that drains PS/2 keyboard events outside interrupt handlers.
+
+Boot-stage markers allow panic and initialization diagnostics to identify the
+last active subsystem.
+
+## 4. Memory Management
+
+The memory subsystem is split into:
+
+- a 4 KiB-frame bitmap allocator;
+- a 2 MiB statically-backed kernel heap;
+- 4-level x86-64 page-table helpers;
+- a fixed table of 16 address-space descriptors;
+- ELF segment loading for the syscall ABI.
+
+The frame allocator consumes usable physical ranges from the Multiboot memory
+map and reserves the first 16 MiB for firmware, bootstrap tables, and kernel
+use.  If no valid map exists, it has a bounded fallback covering 16-32 MiB.
+Allocation, deallocation, reclaim, failure, and page-switch counters are
+tracked for diagnostics.
+
+The kernel heap is a first-fit free-block list with aligned allocation,
+deallocation, coalescing, and fragmentation accounting.  It is protected by
+an IRQ-safe lock.
+
+Address spaces have PML4 roots and support 4 KiB mappings with read-only,
+read-write, user, and executable protection choices.  The implementation
+includes NX protection for non-executable mappings and explicitly refuses to
+overwrite 2 MiB bootstrap mappings.  Address-space activation reloads CR3 and
+increments a page-switch counter.  Address-space destruction reclaims the root
+frame and is used by ELF loading and process cleanup.
+
+The ELF loader validates ELF64 identity, header values, bounded input size,
+program-header ranges, segment sizes, virtual addresses, entry executability,
+and page-aligned copies.  It allocates physical frames and installs segment
+pages into a new address space.
+
+## 5. Scheduling and Processes
+
+The scheduler is an in-kernel, fixed 16-slot round-robin table.  Each task has
+an ID, static name, state, optional private 4 KiB stack, and interrupt context.
+Task states are empty, ready, running, and blocked.
+
+Timer IRQs save the interrupted 22-word register frame into the active task,
+choose the next ready executable task, and copy that task's frame into the
+interrupt stack.  Bootstrap slot zero represents the kernel context and is
+saved/restored separately.  Metadata-only tasks retain cooperative behavior;
+entry-bearing tasks receive real synthetic IRET contexts.
+
+The current scheduler supports:
+
+- spawn and cleanup;
+- block and wake;
+- timer-driven frame preemption;
+- private task stacks;
+- task snapshots;
+- context-switch metrics;
+- a fixed process table with PIDs, parent PIDs, UID, address-space ID, entry,
+  exit code, and running/exited state.
+
+`fork` currently creates a process slot and a separate empty address space;
+it does not yet copy-on-write or copy the parent address space.  `wait`
+reaps exited children.  A real Ring 3 entry path, TSS kernel stack, per-process
+CR3 switching at context time, and user ELF execution are still incomplete.
+Consequently, the syscall boundary is not yet safe for untrusted user code.
+
+## 6. Interrupts, Exceptions, and Timing
+
+PDC-OS initializes the legacy 8259 PIC and remaps IRQs to vectors 32-47.
+It builds an IDT with assembly stubs for exceptions and interrupts.
+
+Interrupt behavior includes:
+
+- PIT channel 0 configured at approximately 1 kHz;
+- IRQ0 for ticks and scheduler preemption;
+- IRQ1 for PS/2 keyboard events;
+- mask control limited to timer and keyboard in the active prototype;
+- exception reporting by vector and descriptive name;
+- special CR2 reporting for page faults;
+- register and system context serialization for diagnostic failures;
+- an IRQ-safe lock primitive that saves and restores interrupt state;
+- `int 0x80`, vector 128, as the syscall gate;
+- only the syscall gate exposed with a Ring 3 descriptor today.
+
+The assembly interrupt frame and syscall dispatcher are coupled: RAX, RBX,
+RCX, and RDX carry the syscall number and arguments, and RAX receives the
+return value.
+
+## 7. Display and Input
+
+The default display is a 512x512x32 linear framebuffer requested through
+Multiboot.  It uses a compact embedded bitmap font to present an 80x25 text
+console.  VGA text memory at 0xB8000 is the fallback and may also mirror kernel
+output.
+
+The writer maintains 512 lines of scrollback and supports Page Up/Page Down,
+live-prompt restoration, backspace, tabs, carriage return, newline, and
+scrolling.  Kernel output is protected by an IRQ lock.
+
+PS/2 set-1 initialization, scancode decoding, modifiers, Caps Lock, Num Lock,
+layouts, repeat handling, queue overflow reporting, and navigation-key
+decoding are implemented.  Keyboard IRQ handling is bounded to queueing events;
+the boot loop drains the queue outside interrupt context.  Console input is
+routed to the active foreground process identity.
+
+The terminal has a 256-byte editable line, up/down history recall, in-place
+cursor movement, command/argument coloring, 8-history-ring retention,
+Backspace, Delete, Home/End, Page Up/Page Down, and Ctrl+L clearing.  It
+dispatches to the built-in command layer rather than executing ELF binaries.
+
+## 8. Storage and the Virtual Filesystem
+
+The ATA PIO driver detects a primary-master device using the IDENTIFY command
+and supports 28-bit-LBA sector reads.  The ATA mount is currently
+experimental and is represented in the VFS as a raw `/mnt/ata` source; it is
+not yet a readable/writable disk filesystem.
+
+The primary filesystem is RAMFS:
+
+- fixed maximum 16 nodes;
+- fixed 32-byte path names;
+- fixed 512-byte file content;
+- 512-byte file limit;
+- root `/`, `/mnt`, `/bin`, `/sbin`, `/etc`, `/lib`;
+- seed files including `/README`, `/hello.txt`, `/etc/os-release`,
+  `/etc/inittab`, `/bin/pdc-sh`, and `/sbin/init`.
+
+The VFS normalizes absolute paths, rejects empty paths, embedded NULs, dot
+components, dot-dot traversal, and overlong names.  It supports mount lookup,
+directory listing, file reads, file creation, writes, and mount snapshots.
+Only RAMFS is a functional mount; ATA is detected and mounted as raw storage
+when available.
+
+Reads of RAMFS files pass through a four-entry fixed disk-cache for diagnostic
+and performance purposes.  Writes invalidate matching cache entries.  Cache
+hit and miss counters are exposed by `perf`.
+
+## 9. Kernel Services
+
+The service layer uses fixed-size interrupt-safe tables:
+
+- up to 16 users;
+- root UID 0 plus bounded named user registration;
+- up to 64 queued IPC messages;
+- up to 16 shared resources;
+- 256-byte IPC message payloads;
+- 512-byte shared-resource payloads;
+- 16 pending-signal slots.
+
+IPC enforces that non-root senders communicate only with processes sharing
+their UID.  Signals reject invalid signal numbers and cross-UID sends by
+non-root callers.  Shared resources use owner and mode permissions with
+owner, root, read, and write checks.
+
+The service table has stable snapshots for `users` and `shm`; the shell exposes
+registered identities and shared-resource keys for inspection.
+
+## 10. Syscall ABI
+
+The current `int 0x80` ABI provides process, console, memory, file, IPC,
+signal, identity, shared-memory, and ELF operations.
+
+Implemented dispatch families include:
+
+- `write`, `exit`, `getpid`, `getticks`;
+- frame allocation;
+- `fork` and `wait`;
+- ELF64 loading;
+- open/read/close;
+- IPC send/receive;
+- signal send/receive;
+- get/set UID;
+- shared-memory create/attach/write/read;
+- foreground-console set/get.
+
+The open handle table contains 16 entries and reserves handles 0/1/2 for console
+I/O.  `read` can read VFS files and performs UID and console checks.  Pointer
+arguments are bounded to a canonical userspace range and reject overflow,
+invalid lengths, and low addresses.
+
+Important syscall constants and the full numeric ABI live in
+`src/os/syscalls.rs`.  Unknown syscall numbers return `ENOSYS`, and errors use
+negative errno-style values.
+
+The ABI is a kernel prototype: it does not yet provide Ring 3 page-table
+isolation, a TSS kernel stack, real user-entry context, `execve` in the sense
+of replacing an existing process, file-descriptor redirection, pipes,
+poll/select, or full POSIX compatibility.
+
+## 11. Userspace and Shell
+
+The userspace startup service reads `/etc/inittab` and reports configured
+`once` and `respawn` entries.  PID 1 represents kernel/init and PID 2 is
+registered as `/bin/pdc-sh` with a scheduler entry.
+
+Core programs are registered in a fixed table of 12 names:
+
+- `echo`, `uname`, `uptime`, `mem`, `free`;
+- `ps`, `pid`, `id`, `users`;
+- `shm`, `ls`, `cat`.
+
+Programs are currently process-like or built-in shell operations; the registry
+is not yet backed by executable ELF package content.  Package installation can
+copy one VFS file into `/bin`, `/sbin`, or `/lib`.
+
+The shell command set includes system identity, uptime, memory and process
+views, filesystem operations, mount reporting, security/performance checks,
+identity/shared-resource views, package operations, console control, and
+power/reboot commands.
+
+The `run` command resolves registered program names.  Direct hardware access
+and privileged operations remain inside kernel modules.
+
+## 12. Security and Reliability
+
+PDC-OS has a boot-time and repeatable `security` review named “10.7.”  It
+uses bounded, allocation-free adversarial checks for:
+
+- unknown and reserved syscalls;
+- invalid pointer ranges;
+- malformed and oversized ELF input;
+- VFS traversal and malformed paths;
+- oversized fixed-size writes;
+- mount and credential boundaries;
+- stable wait/identity behavior.
+
+Failures are counted and reported over COM1.  The report currently records case
+and pass counts rather than silently continuing on failed invariants.
+
+Recovery support includes named boot stages, typed initialization errors,
+panic context, CR2/CR3/RFLAGS reporting, reboot, halt, and emulated ACPI/QEMU
+shutdown port handling.
+
+Security is not equivalent to a complete process sandbox: the current process
+address spaces are not activated for all execution, Ring 3 isolation is not
+complete, and permissions cover a bounded kernel service model rather than a
+full capability system.
+
+## 13. Performance Diagnostics
+
+PDC-OS tracks TSC counts and event counters for:
+
+- scheduler context switches;
+- IRQ wait latency;
+- syscall latency;
+- RAMFS/disk-cache hits and misses;
+- COM1 byte/write timing;
+- VGA byte/write timing;
+- physical frame allocations/deallocations/reclaims/failures;
+- address-space switches;
+- kernel-heap allocations/deallocations/fragments.
+
+The `perf` command displays the metrics.  `bench` performs a bounded
+32-read RAM/filesystem workload.  TSC values are cycle counts, not portable
+wall-clock seconds.
+
+## 14. Build and Validation Model
+
+The build is:
+
+1. Rust `-Zbuild-std=core,compiler_builtins` for `x86_64-unknown-none`;
+2. NASM assembly of bootstrap and interrupt objects;
+3. GNU `ld` linking into a Multiboot ELF;
+4. GRUB/xorriso ISO construction;
+5. QEMU boot smoke tests.
+
+Host targets include baseline, SMP-vCPU shape, 128 MiB, 256 MiB, 1 GiB,
+ATA PIO, PS/2, serial, and VGA profiles.  The 2-vCPU SMP profile is
+emulated-vCPU-only; PDC-OS itself remains single-threaded.
+
+The smoke suite checks serial boot markers, hardware/display/memory/security/
+performance output, and a final boot-complete marker.  Release builds produce
+the ELF, ISO, boot configuration, smoke logs, checksums, toolchain manifest,
+source revision when available, and a source-date-epoch-controlled tarball.
+Verification rebuilds and compares ELF bytes, ISO structure, boot behavior,
+and checksums.
+
+## 15. Current Maturity and Boundaries
+
+The implementation currently provides a credible operating-system skeleton:
+
+- bootable 64-bit kernel;
+- real physical memory discovery and allocation;
+- paging/address-space infrastructure;
+- timer and PS/2 interrupt service;
+- scheduler context switching;
+- fixed RAM filesystem and VFS;
+- ATA detection/PIO reads;
+- console and shell;
+- kernel service and syscall prototypes;
+- diagnostics, recovery, and release automation.
+
+It does not yet provide:
+
+- persistent disk filesystem read/write;
+- PCI enumeration or networking;
+- real Ring 3 process isolation;
+- full `fork`, `execve`, copy-on-write, and `waitpid`;
+- true pipes, shell scripting, or redirection;
+- ACPI/APIC migration;
+- AHCI/NVMe storage;
+- true SMP;
+- GUI/windowing;
+- a POSIX ecosystem or libc;
+- native Rust self-hosting;
+- USB, audio, GPU, virtualization, containers, IPv6/VPN, distributed
+  services, live patching, or formal verification.
+
+Those domains are roadmap material, not source-tree implementation.  The
+proposed sequence remains documented in `path_onward`; the current source
+should be understood as the base implementation upon which later phases would
+be built.

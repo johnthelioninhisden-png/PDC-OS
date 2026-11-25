@@ -1,0 +1,137 @@
+
+
+//*
+
+Closed 
+
+*//
+
+PDC-OS already boots a freestanding x86-64 Rust kernel through GRUB and has early VGA/serial output, interrupts, a basic frame allocator, scheduler metadata, and a shell. The main gap is that several pieces are placeholders: tasks don’t switch execution, syscalls aren’t a protected userspace boundary, and there’s no filesystem yet. Here’s a practical 10-step path from the current prototype to a usable OS:
+
+
+
+ Check when done:[x]
+1. **Establish a reliable development and test loop**
+   - Add repeatable QEMU boot tests and kernel smoke tests.
+   - Make panic, exception, and boot failures diagnosable through serial logs.
+   - Keep build, test, and image-generation steps documented in the `README`.
+   
+
+ Check when done:[x]
+2. **Build proper physical and virtual memory management**
+   - Use the bootloader’s memory map instead of assuming memory above 16 MiB is available.
+   - Replace the fixed monotonic frame allocator with reclaimable allocation.
+   - Implement per-process page tables, kernel/user memory protections, and heap allocation.
+
+ Check when done:[x]
+3. **Make exceptions and interrupts robust**
+   - Give CPU exceptions correct entry stubs and useful fault reports.
+   - Handle interrupt-controller setup and acknowledgements consistently.
+   - Add safe locking and interrupt-state handling before enabling concurrent kernel work.
+
+ Check when done:[x]
+4. **Create a reusable device and driver layer**
+   - Separate hardware access from terminal and kernel logic.
+   - Move keyboard input out of the interrupt handler into queued events.
+   - Add foundational drivers for timers, storage, display, and other target hardware.
+
+ Check when done:[x]
+5. **Turn the scheduler into a real multitasking scheduler**
+   - Save and restore CPU contexts and switch stacks.
+   - Add timer-driven preemption, blocking, wakeups, and task cleanup.
+   - Replace the current task bookkeeping in `scheduler.rs` with runnable task execution.
+
+ Check when done:[x]
+6. **Introduce protected processes and a real syscall ABI**
+   - Add user-mode execution, process address spaces, and ELF program loading.
+   - Validate syscall numbers, pointers, and permissions at the boundary.
+   - Implement process creation, exit, waiting, and basic file/console handles; the current syscall layer is explicitly a placeholder in `syscalls.rs`.
+
+ Check when done:[x]
+7. **Add storage and a virtual filesystem**
+   - Define common file and directory operations, path resolution, and mount points.
+   - Add a simple initial filesystem and a storage driver.
+   - Connect `ls`, `cat`, and `mount` to real filesystem operations instead of placeholders in `commands.rs`.
+
+ Check when done:[x]
+8. **Build essential operating-system services**
+   - Add process-to-process communication, signals or equivalent notifications, and shared resource management.
+   - Establish users, permissions, and a clear security boundary between applications and the kernel.
+   - Add networking if the intended OS needs network access.
+
+ Check when done:[x]
+9. **Move the shell and core programs into userspace**
+   - Make the shell a normal process using console and filesystem APIs.
+   - Add core utilities, configuration/startup services, and a program installation or packaging workflow.
+   - Keep kernel-only operations behind the syscall and permission model.
+
+ Check when done:[]
+10. **Polish the user experience and broaden hardware support**
+   - [x] **10.1 — Stabilize the interactive console**
+     - Define a single console policy for prompt, cursor, screen redraw, line editing, escape sequences, and output overflow.
+     - Finish terminal line discipline in userspace: insert/delete in-line, left/right and home/end movement, history, Ctrl-L clear, Ctrl-C cancel, and a visible prompt.
+     - Make scrolling and output wrapping deterministic for 80-column VGA text and for serial output; preserve the shell prompt after long or redirected output.
+     - Add bounded, rate-limited console output without silently dropping events that the shell or a foreground program needs.
+     - Acceptance: terminal behavior is repeatable in QEMU; there is no line corruption, cursor drift, stale input, or prompt loss after normal editing and page overflow.
+
+   - [x] **10.2 — Complete keyboard and console ownership**
+     - Extend the PS/2 set-1 driver with modifier tracking, Caps Lock, Num Lock, repeat/autorepeat, E0 navigation keys, and layout selection.
+     - Replace fixed terminal ownership with a foreground-process console model; route read events and output to the process that owns `/dev/console`.
+     - Add robust keyboard initialization, controller reset/test, queue-overflow reporting, and hot-unplug or device-loss handling where the platform supports it.
+     - Keep IRQ handling bounded and allocation-free; decode, queue, acknowledge, and wake the console without blocking on scheduling or formatting.
+     - Acceptance: ordinary typing, editing, modifiers, autorepeat, and `Ctrl-C` behavior survive queue pressure and process foreground changes.
+
+   - [x] **10.3 — Decide and implement the optional graphics layer**
+     - Define the first supported output mode as either retained VGA text-only or a framebuffer; do not begin a graphical desktop by default.
+     - If framebuffer support is selected, implement GOP/Multiboot2 framebuffer discovery, mode negotiation, a pixel writer, clipping, console redraw, and font rendering.
+     - Provide an explicit graphics device API and permissions boundary; keep framebuffer/VGA hardware operations out of userspace until the ABI and access model allow it.
+     - Document fallback behavior: choose VGA text if the configured framebuffer is unavailable or unsupported.
+     - Acceptance: the selected mode boots in QEMU and can be switched or reported by a tested command; leaving graphics disabled or unavailable cannot break the text console.
+     - **Implemented:** retained VGA text as the only supported mode; framebuffer discovery and access remain disabled. The kernel-owned display API provides read-only mode metadata to the `display` shell command, while VGA cell operations stay in the kernel driver. QEMU smoke tests verify the boot-reported mode.
+
+   - [x] **10.4 — Broaden the boot and virtual-machine hardware matrix**
+     - Add named QEMU profiles for baseline PC, 2-vCPU SMP, 128 MiB/256 MiB/1 GiB memory, legacy ATA, PS/2-only input, serial-only diagnostics, and default VGA/selected framebuffer modes.
+     - Add BOCHS or another deterministic emulator only if it provides coverage not available from QEMU; keep it behind an optional Make target rather than a required dependency.
+     - Test CPUID/vendor assumptions, RAM map shapes, ACPI/legacy interrupt-controller behavior, ATA PIO variants, and COM1 availability.
+     - Make firmware and hardware detection failures produce serial diagnostics and safe fallbacks instead of assuming a single QEMU configuration.
+     - Acceptance: each supported profile passes a scripted boot/smoke test or is explicitly marked unsupported in the hardware table.
+
+   - [x] **10.5 — Harden interrupts, startup, shutdown, and recovery**
+     - Add bounded timeout and retry behavior to PIT, PS/2, ATA, serial, and memory initialization; return typed failures rather than repeated busy loops.
+     - Add an orderly panic/reset diagnostic path: preserve register, exception, process/task, memory, and boot stage context on COM1 and VGA.
+     - Implement a tested reboot/shutdown path for supported emulated hardware and a clearly bounded halt path where reset is unavailable.
+     - Add boot stage milestones and watchdog or timeout limits to smoke tests so hanging drivers fail reliably instead of timing out without a useful diagnosis.
+     - Acceptance: injected initialization failures and controlled exceptions leave a useful serial report and never silently continue with an unready device.
+       - **Implemented:** PIT, PS/2, ATA, serial, and memory initialization now use bounded polling or setup and report typed initialization failures; boot-stage milestones identify the exact startup point. Exceptions and panics emit register/frame, CR2/CR3, task, stage, tick, and memory context. `halt`, `reboot`, and `shutdown` provide bounded halt/reset/ACPI-emulated poweroff paths, and the QEMU watchdog reports the last completed boot stage when smoke tests fail.
+
+   - [x] **10.6 — Improve scheduler, memory, storage, and I/O performance**
+     - Add practical scheduling and context-switch metrics, memory allocator fragmentation/reclaim counters, IRQ wait latency, syscall latency, disk cache hits, and serial/VGA output timing.
+     - Profile and remove avoidable page-table switches, lock contention, frame allocation churn, PIO polling, and terminal redraw work.
+     - Set and document conservative targets for boot time, idle CPU use, context switching, memory use, and foreground console responsiveness on the baseline QEMU profile.
+     - Use benchmark and soak-test targets for repeated process creation/exit, file operations, keyboard bursts, long uptime, and memory pressure.
+     - Acceptance: representative tests pass repeatably, regressions are reported in serial/test logs, and performance changes are documented with before/after data.
+       - **Implemented:** added allocation-free RDTSC counters for context switches, IRQ wait, syscalls, disk-cache hits/misses, serial/VGA output, frame allocation/deallocation/reclaim, page-table switches, and heap fragmentation. Added `perf` and bounded `bench` shell commands plus a `make benchmark` target that prints the boot performance line captured by the serial smoke test. The README defines conservative baseline targets and a repeatable serial-log before/after workflow.
+
+   - [x] **10.7 — Complete a security and reliability review**
+     - Audit syscall argument validation, pointer/range checks, device access, process credentials, IPC permissions, shared memory lifetimes, ELF loading, and privilege transitions.
+     - Audit allocator/free paths, task cleanup, IRQ locking, interrupt-state restoration, VFS references, mount ownership, and all fixed-size buffers for leaks or races.
+     - Add fuzz or adversarial tests for syscall numbers and pointer lengths, malformed ELF images, malformed filesystem structures, and oversized shell input.
+     - Remove or explicitly isolate placeholder APIs and reject invalid operations with stable error codes rather than panics or kernel continuation.
+     - Acceptance: no known critical or high-severity issue remains without a linked owner, a tracked mitigation, or an intentionally documented out-of-scope condition.
+
+   - [x] **10.8 — Build the supported-hardware and operations documentation**
+     - Document the baseline supported CPU, firmware, memory range, storage, display, keyboard, interrupt controller, QEMU, and development-host requirements.
+     - Record the exact build prerequisites and Make targets for Linux distributions used by the project, plus serial/headless and graphical workflows.
+     - Expand troubleshooting into boot phases, expected log markers, serial capture, panic/exception interpretation, and safe recovery/rebuild steps.
+     - Publish hardware detection capabilities and maintain an explicit support matrix for tested, experimental, and unsupported configurations.
+     - Acceptance: a clean-host or documented container workflow can build, smoke-test, boot, diagnose, and recover PDC-OS from the repository alone.
+
+   - [x] **10.9 — Produce repeatable release and installation artifacts**
+     - Define a release versioning policy and reproducible build inputs; record toolchain, Rust target, NASM, GRUB, and ISO metadata used for each artifact.
+     - Add `make release` to generate the ELF, ISO, checksums, version manifest, boot configuration, and smoke-test log; keep it suitable for offline reuse.
+     - Decide the installation target and minimum disk layout; if ATA installation is in scope, implement a bootable copy, partition/filesystem format handling, and GRUB update validation.
+     - Add release verification and upgrade/recovery instructions, including known unsupported hardware and rollback or rescue behavior.
+     - Acceptance: a clean release build is byte-class reproducible where the toolchain permits, passes the full smoke suite, and has a documented install or reusable ISO path.
+     - Give the final LOC count back to the user. 
+
+The biggest architectural milestones are **memory isolation, real context switching, user-mode processes, and a VFS**. Until those land, the project is best described as a bootable kernel prototype with an in-kernel shell rather than a full OS.

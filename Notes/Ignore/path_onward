@@ -1,0 +1,351 @@
+
+
+
+Check when done: []
+
+Phase 1: Writable Persistent Filesystem
+
+Goal: Upgrade make test-ata from experimental detection to full read/write persistence on disk.
+ 
+1. Block Device Abstraction (src/drivers.rs)
+	• Implement 28-bit/48-bit LBA sector read (0x20) and write (0x30) routines on top of your existing ATA PIO primitives.
+	• Define a clean BlockDevice trait (read_block, write_block, block_size) so your filesystem layer never touches raw I/O ports directly.
+2. Disk Filesystem Driver (src/fs.rs)
+	• Option A (Crate-backed): Wrap fatfs (#![no_std]) around your BlockDevice implementation.
+	• Option B (Native/Zero-dep): Implement a minimal ext2 or flat-inode filesystem to map directly onto your existing src/os/services.rs permissions and identity model.
+	• Register and mount the disk volume (e.g., /disk) into your existing VFS mount table alongside RAMFS.
+3. Syscall & Security Parity (src/os/)
+	• Wire sys_write, sys_create, sys_unlink, and sys_sync through the VFS layer.
+	• Extend your 10.7 Security Review suite to verify path traversal, mount boundaries, and oversized writes against the disk mount.
+ Verification (Makefile)
+	• Update make test-ata to write a file, reboot QEMU with the persistent disk image attached, and assert on COM1 that the contents survive reboot.
+
+
+Check when done: []
+
+Phase 2: Terminal Control & Text Editor
+
+Goal: Edit and save files inside PDC-OS using your 80x25 VGA text console.
+• 1. Terminal Escape Sequences & Raw Mode (src/os/)
+	• Keep VGA hardware encapsulated inside src/drivers.rs and add minimal VT100/ANSI escape sequence parsing in the terminal layer (\x1b[H cursor home, \x1b[2J clear screen, \x1b[K clear line, \x1b[7m inverted colors for a status bar).
+	• Expose a termios-style syscall (or ioctl) allowing a userspace process to switch PS/2 keyboard input from line-buffered (canonical) mode to unbuffered (raw) mode and query terminal dimensions (80x25).
+• 2. Userspace Editor (src/os/userspace.rs)
+	• Add an edit program backed by a line-vector text buffer (Vec<String>).
+	• Handle keyboard navigation and actions: arrow keys, Backspace/Enter, Ctrl+S (save via VFS), and Ctrl+Q (quit).
+	• Render a 1-row inverted status bar at row 24 displaying filename, line count, and unsaved ([Modified]) state.
+• Verification (Makefile)
+	• Validate interactively under make run-vga and make run-serial by creating /disk/hello.txt, editing it, saving, and verifying with cat.
+
+
+Check when done: []
+
+
+Phase 3: PCI Enumeration & Networking Stack
+
+Goal: Send and receive TCP/UDP traffic in QEMU (make run-net / make test-net).
+• 1. PCI Bus Enumeration (src/drivers.rs or src/pci.rs)
+	• Scan PCI configuration space via ports 0xCF8 and 0xCFC to discover vendor/device IDs, BAR0 MMIO/port addresses, and IRQ lines.
+• 2. Network Interface Driver (src/drivers.rs)
+	• Implement an Intel e1000 (QEMU default) or virtio-net driver.
+	• Allocate DMA-safe physical frames via src/memory.rs and map them as uncacheable/MMIO in your page tables for RX/TX descriptor rings.
+	• Wire the NIC's IRQ into src/interrupts.rs to signal packet arrival without blocking inside the interrupt handler.
+• 3. TCP/IP Stack Integration (smoltcp)
+	• Implement smoltcp's Device trait (RxToken / TxToken) over your NIC ring buffers.
+	• Drive iface.poll() using your PIT/TSC monotonic clock (src/drivers.rs).
+	• Target QEMU's user-mode networking (-netdev user,id=net0 -device e1000,netdev=net0), which provides a built-in virtual gateway (10.0.2.2) and DNS forwarder (10.0.2.3).
+• 4. Network Syscalls & User Utilities (src/os/)
+	• Expose minimal socket syscalls (sys_socket, sys_connect, sys_send, sys_recv, sys_close) or unify network handles into your VFS file descriptors.
+	• Implement three userland validation tools:
+		1. ping — ICMP echo to 10.0.2.2
+		2. nslookup — UDP query to 10.0.2.3:53 to resolve an A-record
+		3. fetch — HTTP/1.0 GET over TCP port 80
+• Verification (Makefile)
+	• Add make test-net and make run-net hardware profiles to your smoke suite to validate ICMP ping, DNS lookup, and HTTP fetch in headless QEMU.
+
+
+
+
+Check when done: []
+
+
+Phase 4: TLS (HTTPS) & Modern Internet Access
+
+Goal: Move beyond plain-text HTTP/1.0 (10.0.2.2) to connect securely to real external servers over HTTPS.
+• 1. Entropy & CSPRNG (src/drivers.rs / src/memory.rs)
+	• Collect hardware entropy via CPU instructions (RDRAND / RDSEED where supported) mixed with high-resolution TSC jitter from IRQ timings (src/interrupts.rs).
+	• Expose a kernel entropy pool (sys_getrandom) so cryptographic libraries have cryptographically secure randomness.
+• 2. Wall-Clock Time (src/drivers.rs)
+	• Add a CMOS Real-Time Clock (RTC) driver (ports 0x70 / 0x71) to read the current calendar date/time at boot, plus optional SNTP (UDP port 123) sync over smoltcp.
+	• Required for validating TLS X.509 certificate expiration dates.
+• 3. TLS Wrapper & Root Certificates (src/os/userspace.rs or src/net/)
+	• Integrate a #![no_std] TLS implementation (such as embedded-tls or rustls with alloc) paired with a compact bundle of Mozilla root CA certificates stored on /disk/etc/ssl/certs.
+	• Upgrade fetch to support https:// URLs and chunked transfer encoding.
+• Verification (Makefile)
+	• Add an external or local-mock HTTPS test case to make test-net verifying TLS handshake completion and certificate validation.
+
+
+Check when done: []
+
+
+Phase 5: Real Hardware Readiness (ACPI, AHCI, & Framebuffer)
+
+Goal: Run PDC-OS reliably on bare-metal x86-64 machines rather than relying exclusively on legacy QEMU devices.
+• 1. ACPI & APIC Migration (arch/x86/, src/interrupts.rs)
+	• Parse ACPI tables (RSDP → RSDT/XSDT → MADT and FADT) to discover hardware topology, clean power-off (S5 shutdown), and interrupt routing.
+	• Replace legacy 8259 PIC with Local APIC + I/O APIC to eliminate spurious IRQ conflicts and prepare for true multi-core scheduling (make test-smp).
+• 2. Modern Storage Driver: AHCI / SATA (src/drivers.rs)
+	• Implement a PCI-discovered AHCI driver using DMA command lists and FIS structures, attaching it to the exact same BlockDevice trait created in Phase 1.
+	• Keep ATA PIO as a fallback while defaulting modern drives to AHCI.
+• 3. Linear Framebuffer & Bitmap Font Console (src/drivers.rs)
+	• Enable Multiboot2 framebuffer discovery (currently intentionally disabled) and implement a double-buffered pixel renderer with an embedded 8x16 PSF/bitmap font.
+	• Keep the exact same 80x25+ text/ANSI escape API in src/os/ so your shell and edit work seamlessly on UEFI laptops that lack legacy VGA hardware.
+• Verification (Makefile)
+	• Add make test-ahci and make test-fb profiles to your QEMU smoke matrix, and verify boot on a physical USB stick.
+
+
+Check when done: []
+
+
+Phase 6: True Multiprocessing & Self-Hosting Developer Environment
+
+Goal: Turn PDC-OS into a multi-process system capable of developing, scripting, and managing packages on itself.
+• 1. True Ring 3 Isolation & Copy-on-Write fork/exec (src/memory.rs, src/scheduler.rs)
+	• Enforce strict Ring 0 / Ring 3 privilege separation with per-process page tables (CR3 switching) and kernel-stack-per-thread (TSS.RSP0).
+	• Implement fork() (with Copy-on-Write page faults), execve() (loading standalone ELF64 binaries from /disk/bin), and waitpid().
+• 2. Pipes, Job Control, & Scripting (src/os/, src/os/services.rs)
+	• Connect your existing IPC primitives to anonymous pipes (|) and file descriptor redirection (>, <, 2>&1) in the userspace shell.
+	• Add basic shell scripting (#!/bin/sh execution, environment variables, exit codes $?) so system startup (/disk/etc/init.sh) is data-driven rather than hardcoded.
+• 3. Package & Source Tooling (src/os/userspace.rs)
+	• Extend your existing core program registry and package installer (src/os/userspace.rs) to fetch signed .tar.gz or custom package archives over HTTP/HTTPS into /disk/bin.
+	• Port or write a minimal onboard assembler/interpreter (e.g., a Forth, Lua, or tiny C/BASIC interpreter) so you can write, compile/run, and edit code natively inside PDC-OS.
+• Verification (Makefile)
+	• Extend your 10.7 Security Review to test Ring 3 fault isolation (a crashing userspace process must be reaped cleanly without panicking the kernel) and multi-process pipe stress tests.
+
+
+
+
+Check when done: []
+
+
+
+Phase 7: True SMP & Multi-Core Scalability
+
+Goal: Promote make test-smp from experimental single-threaded execution to genuine parallel execution across all CPU cores.
+• 1. AP (Application Processor) Bootstrap (arch/x86/, src/memory.rs)
+	• Parse the ACPI MADT table to enumerate Local APIC IDs for all secondary cores.
+	• Place a 16-bit real-mode trampoline in low physical memory (< 1MB), broadcast INIT-SIPI-SIPI IPIs (Inter-Processor Interrupts), and transition each AP into 64-bit long mode with its own GDT, IDT, and TSS.
+• 2. Per-CPU State & Run Queues (src/scheduler.rs, src/interrupts.rs)
+	• Dedicate the GS segment base (IA32_GS_BASE MSR) to a per-CPU control block (CpuLocal) holding the current thread pointer, core ID, and IRQ nesting depth.
+	• Replace global scheduler locks with per-core run queues and work-stealing, plus TLB shootdown IPIs when unmapping shared pages.
+• 3. Fine-Grained Locking (src/memory.rs, src/fs.rs)
+	• Split coarse kernel locks into spinlock/mutex primitives with lock-ordering assertions so two cores can simultaneously allocate frames, read disk cache blocks, and handle syscalls without deadlocking.
+• Verification (Makefile)
+	• Promote make test-smp to run multi-threaded CPU + filesystem + network stress workloads across 4+ vCPUs with zero race panics.
+
+
+Check when done: []
+
+
+Phase 8: Window Compositor & Graphical Desktop
+
+Goal: Build a lightweight, responsive graphical desktop on top of Phase 5's linear framebuffer while preserving your strict kernel/userspace display boundary.
+• 1. Input Subsystem & Event Queue (src/drivers.rs, src/os/)
+	• Add PS/2 Mouse (IRQ12) and USB HID (xHCI) pointer/keyboard drivers feeding a unified /dev/input ring buffer.
+• 2. Shared-Memory Surfaces & Compositor (src/memory.rs, src/os/services.rs, src/os/userspace.rs)
+	• Expose shared physical memory regions (shm_open / mmap) so userspace windows draw directly into off-screen pixel buffers without copying across syscalls.
+	• Run a userspace Window Compositor service over your IPC layer (src/os/services.rs) that tracks dirty rectangles, renders window borders/titlebars, and blits the final frame to the framebuffer.
+• 3. Core GUI Apps (src/os/userspace.rs)
+	• Terminal Emulator: Hosts your existing VT100 shell and edit inside resizable windows.
+	• File Manager & System Monitor: Visualizes /disk mounts and live perf metrics (CPU per core, slab/frame churn, disk cache hits).
+• Verification (Makefile)
+	• Add make run-gui and a headless compositor surface-blitting check in make test-fb.
+
+
+Check when done: []
+
+
+Phase 9: POSIX Compatibility Layer & Standard Ecosystem
+
+Goal: Run real-world open-source C and Rust utilities without rewriting them from scratch for PDC-OS.
+• 1. Expanded POSIX Syscall ABI (src/os/, src/fs.rs, src/scheduler.rs)
+	• Implement mmap / munmap, poll / select, fcntl, dup2, stat, readdir, nanosleep, and full POSIX signal delivery (sigaction, SIGINT, SIGCHLD, SIGPIPE).
+	• Add devfs (/dev/null, /dev/zero, /dev/urandom, /dev/tty) and procfs (/proc/meminfo, /proc/uptime, /proc/<pid>).
+• 2. Dynamic Linker & C Standard Library Port (userspace)
+	• Port musl libc (or newlib) targeting x86_64-unknown-pdcos.
+	• Implement a userspace dynamic linker (ld-pdcos.so) for dynamically linked ELF64 shared libraries (.so), or standardize on static musl linking.
+• 3. Cross-Compiled Ecosystem (Makefile)
+	• Cross-compile and bundle battle-tested tools onto /disk/bin: dash or bash, coreutils, vim or nano, lua/python, and curl.
+• Verification (Makefile)
+	• Run a POSIX compliance test suite (e.g., libc-test subset) inside make test-posix and extend the 10.7 Security Review to fuzz all new mmap/poll/signal syscall boundaries.
+
+
+Check when done: []
+
+
+Phase 10: Native Rust Target & Self-Compilation
+
+Goal: Compile PDC-OS’s own userspace programs—and eventually the PDC-OS kernel itself—natively inside PDC-OS.
+• 1. Tier-3 Rust Target Specification (x86_64-unknown-pdcos.json)
+	• Upstream or maintain a custom Rust target.json and std PAL (Platform Abstraction Layer) mapping std::fs, std::net, std::thread, and std::io directly onto PDC-OS syscalls.
+• 2. Native Linker & Toolchain Port (userspace)
+	• Port LLVM/LLD (or a lightweight linker like wild / mold + rustc) and git / make onto /disk.
+	• Optimize the VFS page cache (src/fs.rs) and Copy-on-Write memory allocator (src/memory.rs) to handle thousands of small temporary object files generated during compilation.
+• 3. Self-Hosting Build Loop
+	• Clone the PDC-OS repository onto /disk/src/pdc-os inside QEMU or bare metal, run make and make test natively inside PDC-OS, and verify byte-for-byte reproducibility against a Linux host build (make verify-release).
+• Verification (Makefile)
+	• Execute a native userspace crate build (cargo build) inside PDC-OS and boot the resulting binary.
+
+
+
+Check when done: []
+
+
+
+Phase 11: Modern Bus & High-Speed Storage (PCIe, NVMe, & Journaling FS)
+
+Goal: Replace legacy SATA/AHCI and simple filesystems with modern multi-queue NVMe storage and crash-safe journaling.
+• 1. PCIe ECAM & MSI/MSI-X Interrupts (src/pci.rs, src/interrupts.rs)
+	• Parse the ACPI MCFG table to map PCI Express Enhanced Configuration Access Mechanism (ECAM) memory regions.
+	• Implement Message Signaled Interrupts (MSI / MSI-X) routed directly to specific Local APIC cores, eliminating shared legacy IRQ lines.
+• 2. NVMe Driver (src/drivers.rs)
+	• Implement Admin and per-CPU I/O Submission/Completion Queue pairs over DMA-mapped physical memory, binding directly to your BlockDevice abstraction.
+• 3. Crash-Safe Journaling & Copy-on-Write FS (src/fs.rs)
+	• Upgrade your disk filesystem to support a write-ahead journal (WAL) or Copy-on-Write B-trees with checksummed metadata, fsync barriers, and automatic recovery after simulated power loss.
+
+
+
+Check when done: []
+
+
+
+Phase 12: USB 3.x (xHCI) & Audio Subsystem
+
+Goal: Support hot-pluggable consumer peripherals and real-time audio playback.
+• 1. xHCI Host Controller & USB Core (src/drivers.rs)
+	• Implement xHCI command/event rings, dynamic device enumeration, hub traversal, and hot-plug attach/detach events.
+	• Support USB Mass Storage (BOT/UAS), USB HID (keyboards, mice, gamepads), and USB Ethernet adapters.
+• 2. Audio Architecture (src/drivers.rs, src/os/services.rs)
+	• Add an Intel HDA (High Definition Audio) and VirtIO-Sound driver using cyclic DMA ring buffers.
+	• Build a userspace audio mixing daemon over your IPC layer (src/os/services.rs) exposing /dev/audio PCM streams.
+
+
+
+Check when done: []
+
+
+
+Phase 13: Hardware-Accelerated 2D/3D Graphics & Wayland-Style Protocol
+
+Goal: Move from CPU software blitting (Phase 8) to GPU command submission and smooth 60+ FPS rendering.
+• 1. VirtIO-GPU & DRM/KMS Architecture (src/drivers.rs, src/memory.rs)
+	• Implement a kernel Direct Rendering Manager (DRM) layer for mode-setting (KMS), VSync page-flipping, and DMA-BUF zero-copy buffer sharing between apps and the compositor.
+	• Build a VirtIO-GPU driver (with Virgil3D/Venus command ring support) and basic Intel i915 display engine support.
+• 2. GPU-Accelerated Compositor & Vector Font Engine (userspace)
+	• Upgrade the Phase 8 compositor to composite window surfaces using GPU textures, alpha blending, and TrueType/OpenType font rasterization.
+
+
+
+Check when done: []
+
+
+
+Phase 14: Hardware Virtualization (VT-x / AMD-V Hypervisor)
+
+Goal: Run guest VMs—including nested instances of PDC-OS or Linux—inside PDC-OS.
+• 1. VMX / SVM Kernel Hypervisor (arch/x86/, src/memory.rs)
+	• Enable Intel VT-x (VMXON, VMCS) or AMD-V (VMCB) per core.
+	• Implement Extended Page Tables (EPT / NPT) for two-dimensional guest-physical to host-physical memory translation.
+• 2. Userspace VMM (userspace)
+	• Expose a /dev/kvm-style ioctl interface so a userspace Virtual Machine Monitor can emulate virtual serial ports, VirtIO block/net devices, and boot guest kernels natively.
+
+
+Check when done: []
+
+
+Phase 15: Containers, Namespaces, & Fine-Grained Capabilities
+
+Goal: Evolve your src/os/services.rs identity and permission system into full kernel-enforced sandboxing.
+• 1. Kernel Namespaces & Resource Cgroups (src/fs.rs, src/scheduler.rs, src/net/)
+	• Isolate PID trees, VFS mount tables (chroot / pivot_root), network stacks (virtual veth pairs), and IPC namespaces per container.
+	• Add CPU quota scheduling and per-group physical frame limits (cgroups).
+• 2. Capability-Based Security & Syscall Filtering (src/os/, src/os/services.rs)
+	• Replace coarse root/user checks with unforgeable object capabilities (similar to Capsicum/seL4) and a BPF-style syscall filter (seccomp) verified by your 10.7 Security Review suite.
+
+
+Check when done: []
+
+
+Phase 16: Multi-Architecture Portability (AArch64 & RISC-V 64)
+
+Goal: Decouple PDC-OS from x86-64 assumptions so the same Rust kernel runs on ARM64 and RISC-V hardware.
+• 1. Strict HAL Isolation (arch/x86/, arch/aarch64/, arch/riscv64/)
+	• Extract paging (MMU), context switching, trap frames, and interrupt controllers (GICv3 on ARM64, PLIC/CLINT on RISC-V) behind a unified arch::Platform trait.
+	• Support Device Tree (DTB / Flattened Device Tree) parsing alongside ACPI.
+• 2. Cross-Architecture Smoke Matrix (Makefile)
+	• Expand make test to boot and verify serial markers across qemu-system-x86_64, qemu-system-aarch64, and qemu-system-riscv64.
+
+
+Check when done: []
+
+
+Phase 17: Advanced Networking (IPv6, WireGuard, & Packet Filtering)
+
+Goal: Turn PDC-OS into a modern, secure network node capable of acting as a router, VPN endpoint, or server.
+• 1. Dual-Stack IPv6 & Zero-Copy Socket Buffers (src/net/)
+	• Enable IPv6 (SLAAC, NDP, ICMPv6) alongside IPv4, and replace ring-buffer copies with zero-copy mbuf/sk_buff descriptor chains and TCP segmentation offload (TSO).
+• 2. Built-in VPN & Stateful Firewall (src/net/, src/os/services.rs)
+	• Implement an in-kernel WireGuard tunnel interface (ChaCha20-Poly1305 + Curve25519) and a stateful packet filter (nftables-style ruleset) for NAT and port forwarding.
+
+
+Check when done: []
+
+
+Phase 18: Distributed Microkernel Services & Network Transparency
+
+Goal: Extend your src/os/services.rs IPC boundary across the network (inspired by Plan 9 / Inferno).
+• 1. Network-Transparent VFS (9P / Distributed Mounts) (src/fs.rs)
+	• Implement a 9P2000 (or custom RPC) filesystem client and server so one PDC-OS node can mount another node's /disk, /dev, or /proc seamlessly over TCP/WireGuard.
+• 2. Remote Process Execution & Cluster Discovery (src/os/services.rs)
+	• Allow processes to spawn tasks on remote PDC-OS nodes while transparently forwarding standard I/O, signals, and environment variables back to the local terminal.
+
+
+Check when done: []
+
+
+Phase 19: Live Kernel Patching, Crash Dumps, & Deterministic Replay
+
+Goal: Achieve mainframe-grade observability, zero-downtime updates, and deterministic bug reproduction.
+• 1. Kernel Crash Dumps (kdump) & Flamegraphs (src/interrupts.rs, src/os/)
+	• On kernel panic, reserve a crash-kernel region or write a compressed ELF core dump + symbol backtrace directly to a dedicated raw disk partition.
+	• Extend perf with NMI-based hardware performance counter sampling (PMU) to generate CPU flamegraphs.
+• 2. Live Code Patching & Record/Replay (arch/x86/, src/scheduler.rs)
+	• Support atomic function-entry hot-patching for security fixes without rebooting.
+	• Add deterministic execution recording (logging IRQ timing and external I/O inputs) so any race condition captured in make test-smp can be replayed instruction-for-instruction.
+
+
+Check when done: []
+
+
+Phase 20: Formal Verification & Autonomous Self-Evolution
+
+Goal: Mathematically prove critical kernel invariants and automate kernel verification.
+• 1. Formal Verification of Core Invariants (src/memory.rs, src/scheduler.rs, src/os/)
+	• Annotate critical unsafe Rust blocks (physical frame allocator, page-table walker, spinlocks, and syscall pointer validation) with formal verification harnesses (Kani, Verus, or Prusti) to mathematically prove absence of memory corruption, deadlocks, and privilege escalation.
+• 2. Automated Fuzzing & Self-Tuning Kernel (Makefile, src/os/)
+	• Run continuous coverage-guided syscall and filesystem fuzzing (AFL++ / libFuzzer over QEMU snapshots) integrated into your 10.7 Security Review pipeline.
+	• Expose dynamic scheduler and page-cache telemetry so PDC-OS automatically tunes time slices, read-ahead windows, and slab sizes based on live workload profiles.
+
+Long-Horizon Summary (Phases 11–20)
+
+
+Phase	Domain	Core Addition
+11	Storage & Bus	PCIe ECAM, MSI-X, NVMe queues, Journaling/CoW FS
+12	Peripherals	xHCI USB 3.x stack, HDA/VirtIO audio mixer
+13	GPU Graphics	DRM/KMS, DMA-BUF, VirtIO-GPU 3D compositing
+14	Virtualization	VT-x / AMD-V hypervisor, EPT, userspace VMM
+15	Sandboxing	PID/Mount/Net namespaces, cgroups, object capabilities
+16	Multi-Arch	arch/aarch64 & arch/riscv64 HAL + Device Tree
+17	Advanced Net	IPv6, zero-copy buffers, WireGuard, stateful firewall
+18	Distributed OS	9P network-transparent VFS & remote process execution
+19	Reliability	Crash core dumps, PMU flamegraphs, live patching, deterministic replay
+20	Assurance	Formal verification (Kani/Verus), continuous fuzzing, self-tuning

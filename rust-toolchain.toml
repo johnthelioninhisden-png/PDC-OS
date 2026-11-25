@@ -1,0 +1,5 @@
+# Nightly is required for build-std in the Makefile.
+[toolchain]
+# rust-src supplies core/compiler_builtins sources for the freestanding target.
+channel = "nightly"
+components = ["rust-src"]

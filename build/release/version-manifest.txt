@@ -1,0 +1,19 @@
+PDC-OS release manifest
+release_version=0.1.0
+package_name=pdc_os
+source_revision=not-a-git-repository
+source_date_epoch=946684800
+rust_target=x86_64-unknown-none
+profile=release
+implementation_loc=6665
+rust=rustc 1.102.0-nightly (137d1d494 2026-11-22)
+cargo=cargo 1.102.0-nightly (ae8f06eb4 2026-11-21)
+nasm=NASM version 3.02 compiled on Jul 16 2026
+ld=GNU ld version 2.47.20260726
+grub_mkrescue=/usr/bin/grub2-mkrescue (GRUB) 2.12
+xorriso=xorriso 1.5.8.pl02
+qemu=QEMU emulator version 11.1.3 (qemu-11.1.3-1.fc45)
+artifacts=pdc-os.kernel,pdc-os.iso,boot/grub/grub.cfg
+smoke_profiles=baseline smp mem128 mem256 mem1g ata ps2 serial vga
+elf_reproducible=byte-for-byte-under-fixed-toolchain
+iso_reproducible=toolchain-dependent-volume-uuid-catalog-metadata
