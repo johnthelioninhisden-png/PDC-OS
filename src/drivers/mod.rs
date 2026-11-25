@@ -123,10 +123,10 @@ impl Device for Pit {
     }
 }
 
-/// Kernel-private driver for the 80x25 VGA text buffer.
+/// Kernel-private text console rendered through VGA or the linear framebuffer.
 pub(crate) struct VgaText {
-    width: usize,
-    height: usize,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
     buffer: *mut u16,
 }
 
@@ -150,11 +150,13 @@ const FRAMEBUFFER_ALIAS: usize = 0x4000_0000;
 const FRAMEBUFFER_PAGE_MASK: usize = 0x1F_FFFF;
 const CELL_WIDTH: usize = 6;
 const CELL_HEIGHT: usize = 8;
-const FRAMEBUFFER_CELL_COUNT: usize = VgaText::WIDTH * VgaText::HEIGHT;
+const FRAMEBUFFER_CELL_COUNT: usize = VgaText::MAX_WIDTH * VgaText::MAX_HEIGHT;
 
 static FRAMEBUFFER_ENABLED: AtomicBool = AtomicBool::new(false);
 static FRAMEBUFFER_BASE: AtomicUsize = AtomicUsize::new(0);
 static FRAMEBUFFER_PITCH: AtomicUsize = AtomicUsize::new(0);
+static FRAMEBUFFER_WIDTH: AtomicUsize = AtomicUsize::new(512);
+static FRAMEBUFFER_HEIGHT: AtomicUsize = AtomicUsize::new(512);
 static FRAMEBUFFER_RED_POSITION: AtomicUsize = AtomicUsize::new(0);
 static FRAMEBUFFER_GREEN_POSITION: AtomicUsize = AtomicUsize::new(0);
 static FRAMEBUFFER_BLUE_POSITION: AtomicUsize = AtomicUsize::new(0);
@@ -175,8 +177,8 @@ pub fn display_info() -> DisplayInfo {
     if FRAMEBUFFER_ENABLED.load(Ordering::Acquire) {
         DisplayInfo {
             mode: DisplayMode::Framebuffer,
-            width: 512,
-            height: 512,
+            width: FRAMEBUFFER_WIDTH.load(Ordering::Acquire),
+            height: FRAMEBUFFER_HEIGHT.load(Ordering::Acquire),
             graphics_enabled: true,
         }
     } else {
@@ -189,7 +191,7 @@ pub fn display_info() -> DisplayInfo {
     }
 }
 
-/// Select the requested Multiboot v1 RGB framebuffer when it is available.
+/// Select the Multiboot v1 RGB framebuffer when it is available.
 /// The legacy text console remains the fallback for unsupported modes.
 pub fn init_display(multiboot_magic: u32, multiboot_info: usize) -> Result<(), InitError> {
     const MULTIBOOT_MAGIC: u32 = 0x2BAD_B002;
@@ -234,8 +236,10 @@ pub fn init_display(multiboot_magic: u32, multiboot_info: usize) -> Result<(), I
     ));
 
     if address >> 32 != 0
-        || width != 512
-        || height != 512
+        || width < CELL_WIDTH
+        || height < CELL_HEIGHT
+        || width / CELL_WIDTH > VgaText::MAX_WIDTH
+        || height / CELL_HEIGHT > VgaText::MAX_HEIGHT
         || bits_per_pixel != 32
         || framebuffer_type != 1
         || pitch < width * 4
@@ -255,6 +259,8 @@ pub fn init_display(multiboot_magic: u32, multiboot_info: usize) -> Result<(), I
 
     FRAMEBUFFER_BASE.store(FRAMEBUFFER_ALIAS + page_offset, Ordering::Release);
     FRAMEBUFFER_PITCH.store(pitch, Ordering::Release);
+    FRAMEBUFFER_WIDTH.store(width, Ordering::Release);
+    FRAMEBUFFER_HEIGHT.store(height, Ordering::Release);
     FRAMEBUFFER_RED_POSITION.store(red_position, Ordering::Release);
     FRAMEBUFFER_GREEN_POSITION.store(green_position, Ordering::Release);
     FRAMEBUFFER_BLUE_POSITION.store(blue_position, Ordering::Release);
@@ -265,12 +271,23 @@ pub fn init_display(multiboot_magic: u32, multiboot_info: usize) -> Result<(), I
 impl VgaText {
     pub(crate) const WIDTH: usize = 80;
     pub(crate) const HEIGHT: usize = 25;
+    pub(crate) const MAX_WIDTH: usize = 170;
+    pub(crate) const MAX_HEIGHT: usize = 128;
     pub(crate) const CELL_COLOR: u16 = 0x07;
 
-    pub const fn new() -> Self {
+    pub(crate) fn new() -> Self {
+        let framebuffer_enabled = FRAMEBUFFER_ENABLED.load(Ordering::Acquire);
         Self {
-            width: Self::WIDTH,
-            height: Self::HEIGHT,
+            width: if framebuffer_enabled {
+                FRAMEBUFFER_WIDTH.load(Ordering::Acquire) / CELL_WIDTH
+            } else {
+                Self::WIDTH
+            },
+            height: if framebuffer_enabled {
+                FRAMEBUFFER_HEIGHT.load(Ordering::Acquire) / CELL_HEIGHT
+            } else {
+                Self::HEIGHT
+            },
             buffer: 0xB8000 as *mut u16,
         }
     }
@@ -349,8 +366,8 @@ fn draw_framebuffer_cell(row: usize, column: usize, cell: u16) {
     let character = (cell as u8).to_ascii_uppercase();
     let foreground = vga_rgb((cell >> 8) as u8);
     let background = vga_rgb((cell >> 12) as u8);
-    let origin_x = (512 - VgaText::WIDTH * CELL_WIDTH) / 2 + column * CELL_WIDTH;
-    let origin_y = (512 - VgaText::HEIGHT * CELL_HEIGHT) / 2 + row * CELL_HEIGHT;
+    let origin_x = column * CELL_WIDTH;
+    let origin_y = row * CELL_HEIGHT;
     let rows = glyph(character);
 
     for y in 0..CELL_HEIGHT {

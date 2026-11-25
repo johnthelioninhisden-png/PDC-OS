@@ -4,6 +4,21 @@ PDC-OS is a freestanding, modular monolithic kernel.  The x86-64 implementation
 is the initial architecture backend; architecture-neutral kernel code depends
 on HAL traits and must not manipulate CPU-specific registers or I/O ports.
 
+## Repository layout
+
+- `arch/x86_64/{boot,interrupts,paging,context,syscall,cpu}` contains
+  architecture-specific x86-64 sources and assembly boundaries.
+- `src/arch/` contains architecture backends.
+- `src/hal/` contains architecture-independent hardware contracts.
+- `src/kernel/` contains core, memory, scheduler, interrupt, recovery,
+  performance, and security subsystems.
+- `src/userspace/` contains shell, terminal, syscall, service, and program
+  modules.
+- `src/drivers/` and `src/fs/` contain device and filesystem implementations.
+
+The compatibility modules `hardware` and `os` are aliases or re-exports while
+callers migrate to `arch::x86_64` and `userspace`.
+
 ## Kernel contracts
 
 - `Cpu` describes boot-time CPU capabilities.

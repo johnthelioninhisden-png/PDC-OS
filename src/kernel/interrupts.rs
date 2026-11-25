@@ -308,7 +308,7 @@ pub fn init() {
         }
         // Initialize PS/2 before enabling IRQ 1.  A timeout or controller
         // failure is reported but does not prevent the serial/text fallbacks.
-        match crate::os::keyboard::init_result() {
+        match crate::userspace::keyboard::init_result() {
             Ok(_) => crate::serial::println(format_args!(
                 "PS/2 keyboard initialization complete"
             )),
@@ -415,7 +415,7 @@ pub extern "C" fn interrupt_dispatch(
         let arg1 = unsafe { interrupt_rsp.add(13).read() } as usize;
         let arg2 = unsafe { interrupt_rsp.add(12).read() } as usize;
         let arg3 = unsafe { interrupt_rsp.add(11).read() } as usize;
-        let result = crate::os::syscalls::dispatch_args(number, arg1, arg2, arg3);
+        let result = crate::userspace::syscalls::dispatch_args(number, arg1, arg2, arg3);
         crate::performance::record_syscall(syscall_start);
         unsafe {
             interrupt_rsp.add(14).write(result as u64);
@@ -497,7 +497,7 @@ pub extern "C" fn interrupt_dispatch(
         switched_rsp
     } else if vector == 33 {
         // PS/2 IRQ work is bounded to reading and queueing a key event.
-        crate::os::keyboard::handle_irq();
+        crate::userspace::keyboard::handle_irq();
         acknowledge_pic(vector);
         interrupt_rsp
     } else if vector >= 32 {

@@ -56,8 +56,8 @@ doctor:
 build:
 	mkdir -p build
 	cargo build --release --target $(RUST_TARGET) -Zbuild-std=core,compiler_builtins
-	nasm -f elf64 -o build/boot.o arch/x86_64/boot.asm
-	nasm -f elf64 -o build/interrupts.o arch/x86_64/interrupts.asm
+	nasm -f elf64 -o build/boot.o arch/x86_64/boot/boot.asm
+	nasm -f elf64 -o build/interrupts.o arch/x86_64/interrupts/interrupts.asm
 	ld -m elf_x86_64 -z max-page-size=0x1000 -T linker.ld -o $(KERNEL_ELF) build/boot.o build/interrupts.o $(BUILD_DIR)/libpdc_os.a
 
 $(KERNEL_ISO): build $(GRUB_CFG)

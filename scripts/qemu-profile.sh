@@ -31,7 +31,7 @@ case "$profile" in
 esac
 
 # Keep the serial-only profile in the user's terminal. Graphical profiles show
-# the guest's requested 512x512 framebuffer in a window.
+# the guest's requested framebuffer in a window; Ctrl+Alt+F toggles fullscreen.
 if [ "$profile" = serial ]; then
     "$qemu" "$@" -cdrom "$image" -monitor none
 else

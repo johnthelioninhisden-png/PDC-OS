@@ -14,7 +14,7 @@ const DIRECTORY_COLOR: u8 = 0x0A;
 const ERROR_COLOR: u8 = 0x0C;
 
 fn set_color(color: u8) {
-    crate::os::terminal::set_color(color);
+    crate::userspace::terminal::set_color(color);
 }
 
 fn print_directory_entries(path: &str, entries: &[crate::fs::DirEntry], count: usize) {
@@ -153,8 +153,8 @@ pub fn execute(line: &str) {
         }
         // Terminal operations are delegated so command code does not manipulate
         // VGA internals directly.
-        "clear" => crate::os::terminal::clear(),
-        "history" => crate::os::terminal::print_history(),
+        "clear" => crate::userspace::terminal::clear(),
+        "history" => crate::userspace::terminal::print_history(),
         // Expose display capabilities only; mode changes and device access stay
         // in the kernel until a protected graphics ABI is designed.
         "display" => {
@@ -429,16 +429,16 @@ pub fn execute(line: &str) {
         }),
         "id" => println!(
             "uid={} pid={}",
-            crate::os::syscalls::current_uid(),
-            crate::os::syscalls::current_pid()
+            crate::userspace::syscalls::current_uid(),
+            crate::userspace::syscalls::current_pid()
         ),
-        "users" => crate::os::services::with(|services| {
+        "users" => crate::userspace::services::with(|services| {
             println!("UID  NAME");
             for user in services.users.snapshot().iter().filter(|user| user.active) {
                 println!("{:>3}  {}", user.uid, user.name());
             }
         }),
-        "shm" => crate::os::services::with(|services| {
+        "shm" => crate::userspace::services::with(|services| {
             let resources = services.shared.snapshot();
             let mut count = 0;
             println!("KEY  OWNER  MODE  SIZE");
@@ -458,18 +458,18 @@ pub fn execute(line: &str) {
         }),
         "bin" => {
             println!("NAME  PATH  DESCRIPTION");
-            for program in crate::os::userspace::programs_snapshot() {
+            for program in crate::userspace::userspace::programs_snapshot() {
                 println!("{}  {}  {}", program.name, program.path, program.description);
             }
         }
         "run" => {
             if args.is_empty() {
                 println!("run: missing program operand");
-            } else if let Some(program) = crate::os::userspace::resolve(args) {
-                let pid = crate::os::syscalls::spawn_process(
-                    crate::os::syscalls::current_pid(),
+            } else if let Some(program) = crate::userspace::userspace::resolve(args) {
+                let pid = crate::userspace::syscalls::spawn_process(
+                    crate::userspace::syscalls::current_pid(),
                     program.path,
-                    crate::os::syscalls::current_uid(),
+                    crate::userspace::syscalls::current_uid(),
                 );
                 if pid > 0 {
                     println!("{}: started userspace process pid {}", program.name, pid);
@@ -487,7 +487,7 @@ pub fn execute(line: &str) {
             if source.is_empty() || destination.is_empty() {
                 println!("install: usage: install SOURCE DEST");
             } else {
-                match crate::os::userspace::install(source, destination) {
+                match crate::userspace::userspace::install(source, destination) {
                     Ok(_) => println!("Installed {} to {}", source, destination),
                     Err(error) => println!("install: {}", error),
                 }

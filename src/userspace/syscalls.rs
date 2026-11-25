@@ -323,16 +323,16 @@ fn sys_read(fd: usize, pointer: usize, length: usize) -> isize {
         }
         let mut copied = 0usize;
         while copied < length {
-            let Some(key) = crate::os::keyboard::try_pop() else {
+            let Some(key) = crate::userspace::keyboard::try_pop() else {
                 break;
             };
             let byte = match key {
-                crate::os::keyboard::Key::Character(byte) => Some(byte),
-                crate::os::keyboard::Key::Enter => Some(b'\n'),
-                crate::os::keyboard::Key::Backspace => Some(0x08),
-                crate::os::keyboard::Key::ControlC => Some(3),
-                crate::os::keyboard::Key::ControlL => Some(12),
-                crate::os::keyboard::Key::Escape => Some(0x1B),
+                crate::userspace::keyboard::Key::Character(byte) => Some(byte),
+                crate::userspace::keyboard::Key::Enter => Some(b'\n'),
+                crate::userspace::keyboard::Key::Backspace => Some(0x08),
+                crate::userspace::keyboard::Key::ControlC => Some(3),
+                crate::userspace::keyboard::Key::ControlL => Some(12),
+                crate::userspace::keyboard::Key::Escape => Some(0x1B),
                 _ => None,
             };
             if let Some(byte) = byte {
@@ -399,7 +399,7 @@ fn sys_setuid(uid: usize) -> isize {
     if current_uid() != 0 {
         return EPERM;
     }
-    crate::os::services::with(|services| {
+    crate::userspace::services::with(|services| {
         if !services.users.exists(requested) {
             return EPERM;
         }
@@ -411,7 +411,7 @@ fn sys_ipc_send(receiver: usize, pointer: usize, length: usize) -> isize {
     if !valid_user_range(pointer, length) {
         return EFAULT;
     }
-    if length > crate::os::services::MESSAGE_LIMIT {
+    if length > crate::userspace::services::MESSAGE_LIMIT {
         return EINVAL;
     }
     let sender = current_pid();
@@ -420,7 +420,7 @@ fn sys_ipc_send(receiver: usize, pointer: usize, length: usize) -> isize {
         return ESRCH;
     };
     let bytes = unsafe { core::slice::from_raw_parts(pointer as *const u8, length) };
-    crate::os::services::with(|services| {
+    crate::userspace::services::with(|services| {
         services.ipc.send(sender, sender_uid, receiver, receiver_uid, bytes)
     })
 }
@@ -429,8 +429,8 @@ fn sys_ipc_recv(pointer: usize, length: usize, _unused: usize) -> isize {
     if !valid_user_range(pointer, length) {
         return EFAULT;
     }
-    let mut buffer = [0u8; crate::os::services::MESSAGE_LIMIT];
-    let received = crate::os::services::with(|services| {
+    let mut buffer = [0u8; crate::userspace::services::MESSAGE_LIMIT];
+    let received = crate::userspace::services::with(|services| {
         services.ipc.receive(current_pid(), &mut buffer)
     });
     if received > 0 {
@@ -449,7 +449,7 @@ fn sys_signal_send(pid: usize, signal: usize) -> isize {
     let Some(target_uid) = process_uid(pid) else {
         return ESRCH;
     };
-    crate::os::services::with(|services| {
+    crate::userspace::services::with(|services| {
         services.signals.send(current_uid(), target_uid, pid, signal as u32)
     })
 }
@@ -459,7 +459,7 @@ fn sys_signal_recv(pid: usize) -> isize {
         return EPERM;
     }
     let target = if pid == 0 { current_pid() } else { pid };
-    crate::os::services::with(|services| services.signals.take(target))
+    crate::userspace::services::with(|services| services.signals.take(target))
 }
 
 fn sys_shm_create(key: usize, mode: usize) -> isize {
@@ -467,13 +467,13 @@ fn sys_shm_create(key: usize, mode: usize) -> isize {
         return EINVAL;
     }
     let uid = current_uid();
-    crate::os::services::with(|services| {
+    crate::userspace::services::with(|services| {
         services.shared.create(key, uid, mode as u16)
     })
 }
 
 fn sys_shm_attach(key: usize) -> isize {
-    crate::os::services::with(|services| {
+    crate::userspace::services::with(|services| {
         services.shared.attach(key, current_uid())
     })
 }
@@ -482,11 +482,11 @@ fn sys_shm_write(key: usize, pointer: usize, length: usize) -> isize {
     if !valid_user_range(pointer, length) {
         return EFAULT;
     }
-    if length > crate::os::services::SHARED_RESOURCE_LIMIT {
+    if length > crate::userspace::services::SHARED_RESOURCE_LIMIT {
         return EINVAL;
     }
     let bytes = unsafe { core::slice::from_raw_parts(pointer as *const u8, length) };
-    crate::os::services::with(|services| {
+    crate::userspace::services::with(|services| {
         services.shared.write(key, current_uid(), bytes)
     })
 }
@@ -495,8 +495,8 @@ fn sys_shm_read(key: usize, pointer: usize, length: usize) -> isize {
     if !valid_user_range(pointer, length) {
         return EFAULT;
     }
-    let mut buffer = [0u8; crate::os::services::SHARED_RESOURCE_LIMIT];
-    let read = crate::os::services::with(|services| {
+    let mut buffer = [0u8; crate::userspace::services::SHARED_RESOURCE_LIMIT];
+    let read = crate::userspace::services::with(|services| {
         services.shared.read(key, current_uid(), &mut buffer)
     });
     if read > 0 {
@@ -540,7 +540,7 @@ pub fn set_foreground_console_pid(pid: usize) -> bool {
         return false;
     }
     *FOREGROUND_CONSOLE_PID.lock() = pid;
-    crate::os::terminal::set_foreground_pid(pid);
+    crate::userspace::terminal::set_foreground_pid(pid);
     true
 }
 
@@ -583,13 +583,13 @@ fn sys_exit(exit_code: isize) -> isize {
             process.exit_code = exit_code;
             process.state = ProcessState::Exited;
             crate::scheduler::SCHEDULER.with(|scheduler| scheduler.cleanup(pid));
-            crate::os::services::with(|services| services.signals.clear(pid));
+            crate::userspace::services::with(|services| services.signals.clear(pid));
             if process.address_space != 0 {
                 crate::memory::destroy_address_space(process.address_space);
             }
             if pid == *FOREGROUND_CONSOLE_PID.lock() {
                 *FOREGROUND_CONSOLE_PID.lock() = process.parent_pid;
-                crate::os::terminal::set_foreground_pid(process.parent_pid);
+                crate::userspace::terminal::set_foreground_pid(process.parent_pid);
             }
             return 0;
         }

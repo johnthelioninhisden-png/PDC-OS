@@ -73,7 +73,7 @@ for marker in \
     "PDC-OS boot stage: complete" \
     "Hardware: CPU vendor=" \
     "Hardware: interrupt-controller=legacy-PIC" \
-    "Display mode: linear framebuffer (512x512), framebuffer enabled" \
+    "Display mode: linear framebuffer (1024x768), framebuffer enabled" \
     "Memory: usable=" \
     "Memory and scheduler initialized" \
     "Interrupts and PIT initialized" \

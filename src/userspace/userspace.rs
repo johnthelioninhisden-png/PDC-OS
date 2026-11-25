@@ -52,7 +52,7 @@ pub fn init() {
     // Register the shell as PID 2 and as a real scheduler task.  PID 1 remains
     // the kernel/init process, while core programs are still process-like syscalls.
     // PID 1 is the kernel/init process.  Launch PID 2 as the configured shell.
-    crate::os::syscalls::spawn_process(1, "/bin/pdc-sh", 0);
+    crate::userspace::syscalls::spawn_process(1, "/bin/pdc-sh", 0);
     SCHEDULER.with(|scheduler| {
         let _ = scheduler.spawn_with_entry(2, "/bin/pdc-sh", shell_entry);
     });

@@ -5,6 +5,9 @@ use crate::hal::{
 };
 use crate::memory::{PageFlags, PhysicalAddress, VirtualAddress};
 
+pub mod cpu;
+pub use cpu::{HardwareInfo, detect};
+
 impl Cpu for HardwareInfo {
     fn vendor(&self) -> &str {
         HardwareInfo::vendor(self)
@@ -18,9 +21,6 @@ impl Cpu for HardwareInfo {
         self.long_mode
     }
 }
-
-pub use crate::hardware::HardwareInfo;
-pub use crate::hardware::detect;
 
 pub struct X86_64;
 
@@ -80,12 +80,12 @@ impl TlbInvalidation for X86_64 {
 
 impl CpuMemoryProtection for X86_64 {
     fn enable_no_execute(&mut self) -> bool {
-        let mut supported = false;
+        let supported;
         unsafe {
             let mut edx: u32;
-            let mut ebx: u32;
-            let mut eax: u32;
-            let mut ecx: u32;
+            let mut _ebx: u32;
+            let mut _eax: u32;
+            let mut _ecx: u32;
             core::arch::asm!(
                 "push rbx",
                 "mov eax, 0x80000001",
@@ -94,9 +94,9 @@ impl CpuMemoryProtection for X86_64 {
                 "mov {edx_out:e}, edx",
                 "pop rbx",
                 edx_out = out(reg) edx,
-                ebx_out = out(reg) ebx,
-                inout("eax") 0u32 => eax,
-                out("ecx") ecx,
+                ebx_out = out(reg) _ebx,
+                inout("eax") 0u32 => _eax,
+                out("ecx") _ecx,
                 options(nostack, nomem, preserves_flags),
             );
             supported = edx & (1 << 20) != 0;

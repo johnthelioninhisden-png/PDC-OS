@@ -137,9 +137,9 @@ impl Terminal {
         } else {
             DEFAULT_COLOR
         };
-        crate::os::terminal::set_color(color);
+        crate::userspace::terminal::set_color(color);
         crate::print!("{}", self.line[index] as char);
-        crate::os::terminal::set_color(DEFAULT_COLOR);
+        crate::userspace::terminal::set_color(DEFAULT_COLOR);
     }
 }
 
@@ -232,7 +232,7 @@ pub fn poll_keyboard() {
     // The shell line discipline consumes input only while PID 2 (or whichever
     // process explicitly owns the console) is in the foreground.
     let foreground = foreground_pid();
-    if crate::os::syscalls::foreground_console_pid() != foreground {
+    if crate::userspace::syscalls::foreground_console_pid() != foreground {
         return;
     }
     while let Some(key) = super::keyboard::try_pop() {

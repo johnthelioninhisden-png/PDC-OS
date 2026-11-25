@@ -4,6 +4,7 @@ PDC-OS kernel entry
 PDC-OS boot stage: cpu
 Hardware: CPU vendor=AuthenticAMD PAE=yes long-mode=yes COM1=ready
 Hardware: interrupt-controller=legacy-PIC ATA=auto-detect PS/2=auto-detect
+CPU memory protection: NXE=enabled CR0.WP=enabled
 Framebuffer candidate: address=0xfd000000 512x512 pitch=2048 bpp=32 type=1 rgb=R0/0 G16/8 B8/8
 Display mode: linear framebuffer (512x512), framebuffer enabled
 Initializing memory and scheduler
@@ -23,6 +24,6 @@ PIT initialization complete: channel0=~1000Hz
 PS/2 keyboard initialization complete
 Interrupts and PIT initialized
 PDC-OS boot stage: terminal
-Performance: context-switches=4 irq-events=6 syscalls=0 disk-hits=0 disk-misses=13 serial-bytes=1048 vga-bytes=16 frame-allocs=2 frame-reclaims=0 page-switches=0
+Performance: context-switches=4 irq-events=4 syscalls=0 disk-hits=0 disk-misses=13 serial-bytes=1098 vga-bytes=16 frame-allocs=2 frame-reclaims=0 page-switches=0
 PDC-OS boot complete
 PDC-OS boot stage: complete

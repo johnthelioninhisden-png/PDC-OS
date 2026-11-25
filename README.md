@@ -5,10 +5,11 @@ Its bootstrap is NASM assembly, while kernel subsystems are Rust.
 
 ## Layout
 
-- `arch/x86_64/` - 64-bit boot, GDT, IDT, and interrupt assembly
+- `arch/x86_64/` - boot, interrupt, paging, context, syscall, and CPU assembly
 - `src/arch/` - architecture backends behind kernel contracts
-- `src/hal.rs` - architecture-independent CPU, paging, interrupt, timer, and driver interfaces
-- `src/kernel.rs` - kernel-wide error and invariant contracts
+- `src/hal/` - architecture-independent CPU, paging, interrupt, timer, and driver interfaces
+- `src/kernel/` - core, memory, scheduler, interrupt, security, recovery, and diagnostics
+- `src/userspace/` - shell, terminal, syscalls, services, and programs
 - `docs/` - subsystem, memory-layout, ownership, and dependency contracts
 - `docs/architecture.md` - Stage 1 and Stage 2 architecture baseline
 - `src/` - Rust kernel core
@@ -17,7 +18,7 @@ Its bootstrap is NASM assembly, while kernel subsystems are Rust.
 - `src/scheduler.rs` - preemptive round-robin task scheduler
 - `src/interrupts.rs` - IDT, exception stubs, PIC/PIT, and IRQ-safe locks
 - `src/drivers.rs` - reusable PIT, VGA, ATA PIO, and port I/O device primitives,
-  including the kernel-owned 512x512 framebuffer console and VGA text fallback
+  including the adaptive framebuffer console and VGA text fallback
 - `src/fs.rs` - virtual filesystem, mount table, RAM filesystem, and ATA detection
 - `src/serial.rs` - COM1 diagnostic output
 - `src/os/` - terminal, PS/2 keyboard, syscalls boundary, and built-in commands
@@ -91,7 +92,8 @@ make run
 ```
 
 `make run` packages the Multiboot kernel in a bootable ISO before starting QEMU
-with a 512x512 guest framebuffer in a window.
+with a 1024x768 guest framebuffer in a window. Press Ctrl+Alt+F in QEMU to
+toggle fullscreen.
 
 ## Test and diagnose boot
 
@@ -149,9 +151,12 @@ are intentionally regression observations rather than fabricated percentages.
 
 ### Terminal
 
-The 512x512 framebuffer terminal uses a dark background with color-highlighted
-command names, directory entries, the prompt, and errors. Its compact bitmap
-font retains the familiar 80-column layout. Bounded scrollback retains 512
+The framebuffer terminal fills the available display at its current compact
+bitmap font size; the default 1024x768 mode shows 170 columns and 96 rows. The
+console adapts its row and column count to supported framebuffer dimensions,
+up to the kernel's 4 MiB framebuffer limit, and falls back to 80x25 VGA text
+when graphics mode is unavailable. Color-highlighted command names, directory
+entries, the prompt, and errors remain enabled. Bounded scrollback retains 512
 lines; use Page Up/Page Down to browse and return to the live prompt. Backspace
 edits an unfinished command, and Up/Down recall recent commands. `history`
 lists them, and Ctrl+L clears the screen.
@@ -178,14 +183,15 @@ Interactive counterparts are `make run-baseline`, `make run-smp`,
 `make run-mem128`, `make run-mem256`, `make run-mem1g`, `make run-ata`,
 `make run-ps2`, `make run-serial`, and `make run-vga`. QEMU profiles report CPU
 vendor/features, memory-map parsing, legacy-PIC use, PS/2 status, and ATA
-mount status on COM1. The kernel requests a 512x512x32 RGB framebuffer from
+mount status on COM1. The kernel requests a 1024x768x32 RGB framebuffer from
 GRUB and falls back to VGA text if the bootloader cannot provide it.
 
 ## Display support
 
-The default display is a 512x512x32 RGB linear framebuffer requested through
-the Multiboot v1 header. The kernel renders its 80x25 text console with a
-compact bitmap font; the shell's `display` command reports the active mode.
+The default display is a 1024x768x32 RGB linear framebuffer requested through
+the Multiboot v1 header. The kernel sizes its text grid from the active
+framebuffer and renders it with a compact bitmap font; the shell's `display`
+command reports the active mode.
 If GRUB cannot provide the requested framebuffer, the kernel falls back to
 legacy VGA text mode. Display operations remain in the kernel driver and are
 not exposed through the userspace syscall ABI.

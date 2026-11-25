@@ -38,44 +38,44 @@ pub fn run_adversarial_tests() -> SecurityReport {
     // Unknown and reserved syscall numbers must have one stable ABI result.
     check(
         &mut report,
-        crate::os::syscalls::dispatch_args(usize::MAX, 0, 0, 0)
-            == crate::os::syscalls::ENOSYS,
+        crate::userspace::syscalls::dispatch_args(usize::MAX, 0, 0, 0)
+            == crate::userspace::syscalls::ENOSYS,
     );
     check(
         &mut report,
-        crate::os::syscalls::dispatch_args(9999, usize::MAX, usize::MAX, 0)
-            == crate::os::syscalls::ENOSYS,
+        crate::userspace::syscalls::dispatch_args(9999, usize::MAX, usize::MAX, 0)
+            == crate::userspace::syscalls::ENOSYS,
     );
 
     // Pointer arithmetic and zero-length behavior must never reach the kernel.
     check(
         &mut report,
-        crate::os::syscalls::dispatch_args(crate::os::syscalls::SYS_WRITE, 0, 1, 0)
+        crate::userspace::syscalls::dispatch_args(crate::userspace::syscalls::SYS_WRITE, 0, 1, 0)
             != 0,
     );
     check(
         &mut report,
-        crate::os::syscalls::dispatch_args(
-            crate::os::syscalls::SYS_READ,
+        crate::userspace::syscalls::dispatch_args(
+            crate::userspace::syscalls::SYS_READ,
             3,
             0,
             usize::MAX,
-        ) == crate::os::syscalls::EFAULT,
+        ) == crate::userspace::syscalls::EFAULT,
     );
     check(
         &mut report,
-        crate::os::syscalls::dispatch_args(
-            crate::os::syscalls::SYS_EXEC_ELF,
+        crate::userspace::syscalls::dispatch_args(
+            crate::userspace::syscalls::SYS_EXEC_ELF,
             0,
             4 * 1024 * 1024 + 1,
             0,
-        ) == crate::os::syscalls::EFAULT
-            || crate::os::syscalls::dispatch_args(
-                crate::os::syscalls::SYS_EXEC_ELF,
+        ) == crate::userspace::syscalls::EFAULT
+            || crate::userspace::syscalls::dispatch_args(
+                crate::userspace::syscalls::SYS_EXEC_ELF,
                 0,
                 4 * 1024 * 1024 + 1,
                 0,
-            ) == crate::os::syscalls::EINVAL,
+            ) == crate::userspace::syscalls::EINVAL,
     );
 
     // Path validation rejects traversal and malformed separators.
@@ -102,18 +102,18 @@ pub fn run_adversarial_tests() -> SecurityReport {
     // Credential and wait operations remain stable at identity boundaries.
     check(
         &mut report,
-        crate::os::syscalls::dispatch_args(
-            crate::os::syscalls::SYS_SETUID,
+        crate::userspace::syscalls::dispatch_args(
+            crate::userspace::syscalls::SYS_SETUID,
             usize::MAX,
             0,
             0,
-        ) == crate::os::syscalls::EINVAL
-            || crate::os::syscalls::dispatch_args(
-                crate::os::syscalls::SYS_SETUID,
+        ) == crate::userspace::syscalls::EINVAL
+            || crate::userspace::syscalls::dispatch_args(
+                crate::userspace::syscalls::SYS_SETUID,
                 usize::MAX,
                 0,
                 0,
-            ) == crate::os::syscalls::EPERM,
+            ) == crate::userspace::syscalls::EPERM,
     );
 
     report

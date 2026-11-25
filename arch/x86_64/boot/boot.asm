@@ -5,7 +5,7 @@ BITS 32
 
 SECTION .multiboot
 align 4
-; Multiboot v1 header: request a 512x512x32 linear framebuffer.
+; Multiboot v1 header: request a 1024x768x32 linear framebuffer.
 dd 0x1BADB002
 dd 0x00000004
 dd -(0x1BADB002 + 0x00000004)
@@ -13,8 +13,8 @@ dd -(0x1BADB002 + 0x00000004)
 ; at their fixed Multiboot v1 offsets even though address loading is unused.
 dd 0, 0, 0, 0, 0
 dd 0
-dd 512
-dd 512
+dd 1024
+dd 768
 dd 32
 
 SECTION .text
@@ -70,7 +70,7 @@ _start:
     loop .map_page
 
     ; Map the bootloader's framebuffer at the fixed 1 GiB kernel alias. Two
-    ; adjacent 2 MiB pages cover the requested 512x512x32 mode and its offset.
+    ; adjacent 2 MiB pages cover supported framebuffers up to 4 MiB and offset.
     mov esi, [multiboot_info]
     test esi, esi
     jz .no_framebuffer
