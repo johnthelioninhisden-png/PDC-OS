@@ -79,6 +79,8 @@ for marker in \
     "Interrupts and PIT initialized" \
     "PDC-OS userspace startup complete" \
     "Security review: 10.7" \
+    "Architecture verification: failure-paths" \
+    "Architecture verification: Stage 1 cases=" \
     "PDC-OS boot complete" \
     "Performance:"
 do
@@ -88,6 +90,20 @@ do
         exit 1
     fi
 done
+
+verification_summary=$(grep "Architecture verification: Stage 1 cases=" "$log" | tail -n 1 || true)
+if [ -z "$verification_summary" ]; then
+    echo "QEMU smoke test did not report the architecture verification summary" >&2
+    exit 1
+fi
+case "$verification_summary" in
+    *" failures=0"*) ;;
+    *)
+        echo "Architecture verification reported failures: $verification_summary" >&2
+        cat "$log" >&2
+        exit 1
+        ;;
+esac
 
 if grep -Fq "KERNEL PANIC:" "$log" || grep -Fq "KERNEL EXCEPTION:" "$log"; then
     echo "Kernel reported a panic or exception during boot" >&2

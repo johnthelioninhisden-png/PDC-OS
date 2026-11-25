@@ -4,6 +4,7 @@
 //! Timer interrupts copy the interrupted register frame into the active task
 //! and restore the next runnable task's frame.
 
+use crate::arch::x86_64::context::{X86_64Context, CONTEXT_REGISTER_COUNT};
 use crate::interrupts::IrqLock;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -12,6 +13,48 @@ pub enum TaskState {
     Ready,
     Running,
     Blocked,
+}
+
+/// Architecture-neutral 22-slot interrupted-register context.
+///
+/// The x86-64 backend currently stores this format in fixed task slots.
+/// Future backends retain the scheduler interface and replace only context
+/// save/restore mechanics.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ThreadContext {
+    pub registers: [u64; CONTEXT_REGISTER_COUNT],
+    pub initialized: bool,
+}
+
+impl ThreadContext {
+    pub const fn empty() -> Self {
+        Self {
+            registers: [0; 22],
+            initialized: false,
+        }
+    }
+
+    pub fn save(&mut self, source: *const u64) -> bool {
+        if source.is_null() {
+            return false;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(source, self.registers.as_mut_ptr(), 22);
+        }
+        self.initialized = true;
+        true
+    }
+
+    pub fn restore(&self, destination: *mut u64) -> bool {
+        if destination.is_null() || !self.initialized {
+            return false;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.registers.as_ptr(), destination, 22);
+        }
+        true
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -95,19 +138,15 @@ impl Scheduler {
                     return false;
                 };
                 let stack_top = stack_base + crate::memory::frame_size();
-                let mut context = [0u64; 22];
-                context[17] = entry as usize as u64; // Synthetic IRET instruction pointer.
-                context[18] = 0x08;                  // Kernel code segment.
-                context[19] = 0x202;                 // Interrupts enabled, reserved flag set.
-                context[20] = stack_top as u64;      // Synthetic interrupt stack pointer.
-                context[21] = 0x10;                  // Kernel data segment.
+                let mut context = X86_64Context::new_kernel_entry(entry, stack_top);
+                let context_registers = *context.registers();
 
                 self.tasks[index] = Task {
                     id,
                     state: TaskState::Ready,
                     name,
                 };
-                self.contexts[index] = context;
+                self.contexts[index] = context_registers;
                 self.executable[index] = true;
                 self.initialized[index] = true;
                 self.stack_bases[index] = stack_base;
@@ -123,9 +162,7 @@ impl Scheduler {
         let old = self.current;
         for offset in 1..=self.tasks.len() {
             let candidate = (old + offset) % self.tasks.len();
-            if self.tasks[candidate].state == TaskState::Ready
-                && self.executable[candidate]
-            {
+            if self.tasks[candidate].state == TaskState::Ready && self.executable[candidate] {
                 if old != 0 {
                     self.tasks[old].state = TaskState::Ready;
                 }
@@ -145,8 +182,7 @@ impl Scheduler {
         for offset in 1..=self.tasks.len() {
             let index = (old + offset) % self.tasks.len();
             if (index == 0 && self.bootstrap_initialized)
-                || (self.tasks[index].state == TaskState::Ready
-                    && self.executable[index])
+                || (self.tasks[index].state == TaskState::Ready && self.executable[index])
             {
                 candidate = Some(index);
                 break;
@@ -169,11 +205,7 @@ impl Scheduler {
                 );
                 self.bootstrap_initialized = true;
             } else if self.executable[old] {
-                core::ptr::copy_nonoverlapping(
-                    interrupt_rsp,
-                    self.contexts[old].as_mut_ptr(),
-                    22,
-                );
+                core::ptr::copy_nonoverlapping(interrupt_rsp, self.contexts[old].as_mut_ptr(), 22);
             }
 
             let next_context = if next == 0 {
@@ -181,11 +213,7 @@ impl Scheduler {
             } else {
                 &mut self.contexts[next]
             };
-            core::ptr::copy_nonoverlapping(
-                next_context.as_ptr(),
-                interrupt_rsp,
-                22,
-            );
+            core::ptr::copy_nonoverlapping(next_context.as_ptr(), interrupt_rsp, 22);
         }
 
         if old != 0 && self.tasks[old].state == TaskState::Running {
@@ -224,6 +252,16 @@ impl Scheduler {
             }
         }
         false
+    }
+
+    /// Queue-independent block contract: transition a named task to Blocked.
+    pub fn block_task(&mut self, id: usize) -> bool {
+        self.block(id)
+    }
+
+    /// Queue-independent wake contract: make a blocked task runnable again.
+    pub fn wake_task(&mut self, id: usize) -> bool {
+        self.wake(id)
     }
 
     pub fn cleanup(&mut self, id: usize) -> bool {

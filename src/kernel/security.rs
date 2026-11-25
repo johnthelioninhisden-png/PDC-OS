@@ -1,5 +1,5 @@
 //! 10.7 security and reliability invariants.
-//! 
+//!
 //! These checks are deliberately bounded and allocation-free.  They exercise
 //! adversarial syscall numbers, pointer ranges, malformed ELF headers, VFS
 //! traversal, oversized writes, and fixed-resource limits at boot and through
@@ -23,17 +23,82 @@ fn check(report: &mut SecurityReport, condition: bool) {
     if condition {
         report.passed += 1;
     } else {
-        crate::serial::println(format_args!(
-            "Security review: 10.7 case {} failed",
-            case
-        ));
+        crate::serial::println(format_args!("Security review: 10.7 case {} failed", case));
     }
 }
 
 /// Run the bounded adversarial review suite.  Failures are reported as stable
 /// test counts; they never attempt to continue with an untested subsystem.
 pub fn run_adversarial_tests() -> SecurityReport {
-    let mut report = SecurityReport { cases: 0, passed: 0 };
+    let mut report = SecurityReport {
+        cases: 0,
+        passed: 0,
+    };
+
+    // Stage 8: verify CPU protections and the x86-64 leaf-mapping policy.
+    check(
+        &mut report,
+        crate::arch::x86_64::cpu::nxe_enabled()
+            == crate::arch::x86_64::detect().nx_supported,
+    );
+    check(
+        &mut report,
+        crate::arch::x86_64::cpu::write_protection_enabled(),
+    );
+    check(
+        &mut report,
+        crate::memory::validate_mapping(
+            usize::MAX,
+            crate::memory::USER_VIRTUAL_START,
+            4096,
+            crate::memory::PageFlags::UserReadWrite,
+        ) == false,
+    );
+    check(
+        &mut report,
+        !crate::memory::validate_mapping(
+            0,
+            0,
+            4096,
+            crate::memory::PageFlags::UserReadWrite,
+        ),
+    );
+    check(
+        &mut report,
+        !crate::memory::validate_mapping(
+            0,
+            crate::memory::KERNEL_VIRTUAL_START,
+            4096,
+            crate::memory::PageFlags::UserReadWrite,
+        ),
+    );
+    if let (Some(space), Some(leaf)) = (
+        crate::memory::create_address_space(),
+        crate::memory::allocate_typed_frame(),
+    ) {
+        let virtual_address = crate::memory::VirtualAddress::new(0x400000)
+            .expect("security review uses an aligned user page");
+        check(
+            &mut report,
+            crate::memory::map_typed_page(
+                space,
+                virtual_address,
+                leaf,
+                crate::memory::PageFlags::UserReadWrite,
+            ),
+        );
+        check(
+            &mut report,
+            crate::memory::validate_existing_mapping(
+                space,
+                virtual_address.as_usize(),
+                crate::memory::PageFlags::UserReadWrite,
+            ),
+        );
+        let _ = crate::memory::destroy_address_space(space);
+    } else {
+        check(&mut report, false);
+    }
 
     // Unknown and reserved syscall numbers must have one stable ABI result.
     check(
@@ -79,23 +144,24 @@ pub fn run_adversarial_tests() -> SecurityReport {
     );
 
     // Path validation rejects traversal and malformed separators.
-    check(&mut report, crate::fs::Vfs::normalize("/bin/../etc") .is_none());
-    check(&mut report, crate::fs::Vfs::normalize("") .is_none());
-    check(&mut report, crate::fs::Vfs::normalize("relative") .is_none());
-    check(&mut report, crate::fs::Vfs::normalize("/bin") .is_some());
+    check(
+        &mut report,
+        crate::fs::Vfs::normalize("/bin/../etc").is_none(),
+    );
+    check(&mut report, crate::fs::Vfs::normalize("").is_none());
+    check(&mut report, crate::fs::Vfs::normalize("relative").is_none());
+    check(&mut report, crate::fs::Vfs::normalize("/bin").is_some());
 
     // Fixed-size VFS writes and mount operations return typed errors.
     let oversized = [0u8; crate::fs::FILE_LIMIT + 1];
     crate::fs::with(|vfs| {
         check(
             &mut report,
-            vfs.write("/README", &oversized)
-                == Err(crate::fs::FsError::TooLarge),
+            vfs.write("/README", &oversized) == Err(crate::fs::FsError::TooLarge),
         );
         check(
             &mut report,
-            vfs.mount("not-a-filesystem", "/tmp")
-                == Err(crate::fs::FsError::NotFound),
+            vfs.mount("not-a-filesystem", "/tmp") == Err(crate::fs::FsError::NotFound),
         );
     });
 

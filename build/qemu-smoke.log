@@ -1,29 +1,47 @@
 PDC-OS boot: entering x86-64 kernel
 PDC-OS boot stage: serial
 PDC-OS kernel entry
+PDC-OS boot stage: drivers
+Driver discovery: devices=5 registered
 PDC-OS boot stage: cpu
-Hardware: CPU vendor=AuthenticAMD PAE=yes long-mode=yes COM1=ready
+Hardware: CPU vendor=AuthenticAMD PAE=yes long-mode=yes NX=supported COM1=ready
 Hardware: interrupt-controller=legacy-PIC ATA=auto-detect PS/2=auto-detect
 CPU memory protection: NXE=enabled CR0.WP=enabled
-Framebuffer candidate: address=0xfd000000 512x512 pitch=2048 bpp=32 type=1 rgb=R0/0 G16/8 B8/8
-Display mode: linear framebuffer (512x512), framebuffer enabled
+Framebuffer candidate: address=0xfd000000 1024x768 pitch=4096 bpp=32 type=1 rgb=R0/0 G16/8 B8/8
+Display mode: linear framebuffer (1024x768), framebuffer enabled
 Initializing memory and scheduler
 PDC-OS boot stage: memory
-Kernel invariants: checks=4 failures=0
+CPU execution infrastructure: TSS.IST=ready
+Kernel invariants: checks=7 failures=0
 PDC-OS boot stage: scheduler
+Architecture verification: starting
+Architecture verification: migration
+Architecture verification: kernel-interface
+Architecture verification: address-types
+Architecture verification: frame-allocator
+Architecture verification: heap-allocator
+Architecture verification: boot-information
+Architecture verification: failure-paths
+Architecture verification: address-spaces
+Architecture verification: address created
+Architecture verification: address created
+Architecture verification: process-threads
+Architecture verification: synchronization
+Architecture verification: driver-registry
+Architecture verification: Stage 1 cases=156 passed=156 failures=0
 PDC-OS boot stage: filesystem
 PDC-OS initialization failure: device=ATA primary-master error=not-present stage=filesystem
 Storage: ATA primary-master=unsupported mount=none
 PDC-OS boot stage: userspace
 PDC-OS userspace startup complete
-Security review: 10.7 cases=12 passed=12 failures=0
-Memory: usable=260992 KiB allocated=8 KiB map-regions=7
+Security review: 10.7 cases=19 passed=19 failures=0
+Memory: usable=260992 KiB allocated=16 KiB map-regions=7
 Memory and scheduler initialized
 PDC-OS boot stage: interrupts
 PIT initialization complete: channel0=~1000Hz
 PS/2 keyboard initialization complete
 Interrupts and PIT initialized
 PDC-OS boot stage: terminal
-Performance: context-switches=4 irq-events=4 syscalls=0 disk-hits=0 disk-misses=13 serial-bytes=1098 vga-bytes=16 frame-allocs=2 frame-reclaims=0 page-switches=0
+Performance: context-switches=4 irq-events=4 syscalls=0 disk-hits=0 disk-misses=13 serial-bytes=1876 vga-bytes=16 frame-allocs=49 frame-reclaims=45 page-switches=0
 PDC-OS boot complete
 PDC-OS boot stage: complete

@@ -5,25 +5,16 @@ Its bootstrap is NASM assembly, while kernel subsystems are Rust.
 
 ## Layout
 
-- `arch/x86_64/` - boot, interrupt, paging, context, syscall, and CPU assembly
+- `arch/x86_64/` - boot and interrupt assembly
 - `src/arch/` - architecture backends behind kernel contracts
 - `src/hal/` - architecture-independent CPU, paging, interrupt, timer, and driver interfaces
 - `src/kernel/` - core, memory, scheduler, interrupt, security, recovery, and diagnostics
 - `src/userspace/` - shell, terminal, syscalls, services, and programs
-- `docs/` - subsystem, memory-layout, ownership, and dependency contracts
-- `docs/architecture.md` - Stage 1 and Stage 2 architecture baseline
-- `src/` - Rust kernel core
-- `src/memory.rs` - physical frame allocator
-- `src/memory.rs` - reclaimable frames, kernel heap, page tables, and address spaces
-- `src/scheduler.rs` - preemptive round-robin task scheduler
-- `src/interrupts.rs` - IDT, exception stubs, PIC/PIT, and IRQ-safe locks
-- `src/drivers.rs` - reusable PIT, VGA, ATA PIO, and port I/O device primitives,
-  including the adaptive framebuffer console and VGA text fallback
-- `src/fs.rs` - virtual filesystem, mount table, RAM filesystem, and ATA detection
+- `src/drivers/` - device discovery, lifecycle, PIT, VGA, ATA, and port I/O
+- `src/fs/` - virtual filesystem and RAM filesystem
 - `src/serial.rs` - COM1 diagnostic output
-- `src/os/` - terminal, PS/2 keyboard, syscalls boundary, and built-in commands
-- `src/os/services.rs` - IPC, signals, shared resources, identities, and kernel-side permissions
-- `src/os/userspace.rs` - userspace shell/process startup, core program registry, and package installation
+- `docs/` - subsystem, memory-layout, ownership, and dependency contracts
+- `docs/architecture.md` - PDC-OS 0.2.0 architectural baseline and migration decisions
 - `linker.ld` - kernel memory layout
 - `Makefile` - build and run commands
 

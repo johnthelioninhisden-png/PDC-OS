@@ -172,7 +172,7 @@ This is the target organization, not a demand to move every file immediately.
 
 I would migrate subsystem by subsystem, keeping the build functional throughout.
 
-Check this mark when done [x]
+Check this mark when done []
 
 # **3. Kernel development stages: PDC-OS 0.1–0.6**
 

@@ -278,13 +278,23 @@ pub extern "C" fn kernel_main(multiboot_magic: u64, multiboot_info: u64) -> ! {
     let serial_ready = serial::init();
     recovery::set_boot_stage(recovery::BootStage::Serial);
     serial::println(format_args!("PDC-OS kernel entry"));
+    crate::kernel::percpu::init(0);
+    recovery::set_boot_stage(recovery::BootStage::Drivers);
+    let discovered_devices = crate::drivers::discover_legacy_devices();
+    serial::println(format_args!(
+        "Driver discovery: devices={} registered",
+        discovered_devices
+    ));
+    crate::drivers::DEVICE_REGISTRY.initialize("COM1 serial");
+    crate::drivers::DEVICE_REGISTRY.activate("COM1 serial");
     recovery::set_boot_stage(recovery::BootStage::Cpu);
     let cpu = arch::x86_64::detect();
     serial::println(format_args!(
-        "Hardware: CPU vendor={} PAE={} long-mode={} COM1={}",
+        "Hardware: CPU vendor={} PAE={} long-mode={} NX={} COM1={}",
         cpu.vendor(),
         if cpu.pae { "yes" } else { "no" },
         if cpu.long_mode { "yes" } else { "no" },
+        if cpu.nx_supported { "supported" } else { "unavailable" },
         if serial_ready { "ready" } else { "unavailable" }
     ));
     serial::println(format_args!(
@@ -304,6 +314,8 @@ pub extern "C" fn kernel_main(multiboot_magic: u64, multiboot_info: u64) -> ! {
             error.name()
         ));
     }
+    crate::drivers::DEVICE_REGISTRY.initialize("VGA text");
+    crate::drivers::DEVICE_REGISTRY.activate("VGA text");
     WRITER.lock().clear_screen();
     let display = drivers::display_info();
     serial::println(format_args!(
@@ -337,6 +349,11 @@ pub extern "C" fn kernel_main(multiboot_magic: u64, multiboot_info: u64) -> ! {
     if let Err(error) = memory::init_result(multiboot_magic as u32, multiboot_info as usize) {
         recovery::report_init_failure("memory", error);
     }
+    let tss_ready = arch::x86_64::tss::init();
+    serial::println(format_args!(
+        "CPU execution infrastructure: TSS.IST={}",
+        if tss_ready { "ready" } else { "unavailable" }
+    ));
     let invariant_failures = kernel::run_invariants(recovery::BootStage::Memory);
     serial::println(format_args!(
         "Kernel invariants: checks={} failures={}",
@@ -349,6 +366,14 @@ pub extern "C" fn kernel_main(multiboot_magic: u64, multiboot_info: u64) -> ! {
         scheduler.spawn(2, "kernel/idle");
         scheduler.spawn(3, "kernel/monitor");
     });
+    serial::println(format_args!("Architecture verification: starting"));
+    let verification = kernel::verification::run();
+    serial::println(format_args!(
+        "Architecture verification: Stage 1 cases={} passed={} failures={}",
+        verification.cases,
+        verification.passed(),
+        verification.failures
+    ));
     userspace::services::init();
     userspace::syscalls::init();
     recovery::set_boot_stage(recovery::BootStage::Filesystem);

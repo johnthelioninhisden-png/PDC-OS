@@ -4,12 +4,17 @@
 //! CPU, firmware, or device feature is implemented beyond the bootstrap checks.
 
 use core::arch::asm;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+static NXE_ENABLED: AtomicBool = AtomicBool::new(false);
+static WRITE_PROTECTION_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
 pub struct HardwareInfo {
     pub vendor: [u8; 12],
     pub pae: bool,
     pub long_mode: bool,
+    pub nx_supported: bool,
 }
 
 impl HardwareInfo {
@@ -69,5 +74,44 @@ pub fn detect() -> HardwareInfo {
     }
     let long_mode = edx & (1 << 29) != 0;
 
-    HardwareInfo { vendor, pae, long_mode }
+    let nx_supported = unsafe {
+        let mut _eax: u32;
+        let mut ebx: u32;
+        let mut ecx: u32;
+        let mut edx: u32;
+        asm!(
+            "push rbx",
+            "cpuid",
+            "mov {ebx_out:e}, ebx",
+            "pop rbx",
+            ebx_out = out(reg) ebx,
+            inout("eax") 0x80000001u32 => _eax,
+            out("ecx") ecx,
+            out("edx") edx,
+            options(nostack, nomem, preserves_flags)
+        );
+        let _ = (ebx, ecx);
+        edx & (1 << 20) != 0
+    };
+
+    HardwareInfo { vendor, pae, long_mode, nx_supported }
+}
+
+/// Report whether this CPU backend successfully enabled x86-64 NXE.
+pub fn nxe_enabled() -> bool {
+    NXE_ENABLED.load(Ordering::Acquire)
+}
+
+/// Report whether CR0 write protection is active.
+pub fn write_protection_enabled() -> bool {
+    WRITE_PROTECTION_ENABLED.load(Ordering::Acquire)
+}
+
+/// Mark protection state after the architecture backend verifies control registers.
+pub(crate) fn set_nxe_enabled(enabled: bool) {
+    NXE_ENABLED.store(enabled, Ordering::Release);
+}
+
+pub(crate) fn set_write_protection_enabled(enabled: bool) {
+    WRITE_PROTECTION_ENABLED.store(enabled, Ordering::Release);
 }

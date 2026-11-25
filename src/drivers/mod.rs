@@ -6,11 +6,368 @@
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crate::recovery::InitError;
+use crate::interrupts::IrqLock;
+
+const DEVICE_SLOTS: usize = 16;
+const RESOURCE_SLOTS: usize = 4;
+const INTERRUPT_SLOTS: usize = 16;
+
+#[derive(Clone, Copy)]
+pub struct DeviceRegistration {
+    pub name: &'static str,
+    pub state: DeviceState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceState {
+    Empty,
+    Discovered,
+    Registered,
+    Initialized,
+    Active,
+    Removed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceClass {
+    Platform,
+    Legacy,
+    Storage,
+    Display,
+    Input,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HardwareResource {
+    PortRange { base: u16, length: u16 },
+    Irq { line: u8 },
+    MemoryRange { base: usize, length: usize },
+}
+
+#[derive(Clone, Copy)]
+pub struct DeviceDescriptor {
+    pub name: &'static str,
+    pub class: DeviceClass,
+    pub resources: [HardwareResource; RESOURCE_SLOTS],
+    pub resource_count: usize,
+}
+
+impl DeviceDescriptor {
+    pub const fn new(name: &'static str, class: DeviceClass) -> Self {
+        Self {
+            name,
+            class,
+            resources: [HardwareResource::PortRange { base: 0, length: 0 }; RESOURCE_SLOTS],
+            resource_count: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InterruptMode {
+    Exclusive,
+    Shared,
+}
+
+pub type InterruptHandler = fn() -> bool;
+
+#[derive(Clone, Copy)]
+pub struct InterruptRegistration {
+    pub owner: &'static str,
+    pub vector: u8,
+    pub irq: u8,
+    pub mode: InterruptMode,
+    pub handler: Option<InterruptHandler>,
+}
+
+impl InterruptRegistration {
+    pub const fn empty() -> Self {
+        Self {
+            owner: "",
+            vector: 0,
+            irq: 0,
+            mode: InterruptMode::Exclusive,
+            handler: None,
+        }
+    }
+}
+
+pub struct DeviceRegistry {
+    slots: IrqLock<[DeviceRegistration; DEVICE_SLOTS]>,
+    descriptors: IrqLock<[Option<DeviceDescriptor>; DEVICE_SLOTS]>,
+    interrupts: IrqLock<[Option<InterruptRegistration>; INTERRUPT_SLOTS]>,
+}
+
+impl DeviceRegistry {
+    pub const fn new() -> Self {
+        const EMPTY: DeviceRegistration = DeviceRegistration {
+            name: "",
+            state: DeviceState::Empty,
+        };
+        Self {
+            slots: IrqLock::new([EMPTY; DEVICE_SLOTS]),
+            descriptors: IrqLock::new([None; DEVICE_SLOTS]),
+            interrupts: IrqLock::new([None; INTERRUPT_SLOTS]),
+        }
+    }
+
+    /// Discover a device by publishing a typed descriptor only.
+    /// Resource claims are checked here, before a driver acquires hardware.
+    pub fn register_descriptor(&self, descriptor: DeviceDescriptor) -> bool {
+        let mut slots = self.slots.lock();
+        let mut descriptors = self.descriptors.lock();
+
+        if slots.iter().any(|slot| slot.name == descriptor.name
+            && slot.state != DeviceState::Empty
+            && slot.state != DeviceState::Removed)
+        {
+            return false;
+        }
+
+        for resource in descriptor.resources.iter().take(descriptor.resource_count) {
+            for existing in descriptors.iter().flatten() {
+                if Self::resources_overlap(*resource, existing.resources, existing.resource_count) {
+                    return false;
+                }
+            }
+        }
+
+        for index in 0..DEVICE_SLOTS {
+            if slots[index].state == DeviceState::Empty
+                || slots[index].state == DeviceState::Removed
+            {
+                slots[index] = DeviceRegistration {
+                    name: descriptor.name,
+                    state: DeviceState::Discovered,
+                };
+                descriptors[index] = Some(descriptor);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Compatibility registration for callers that have not yet published resources.
+    pub fn register(&self, name: &'static str) -> bool {
+        let descriptor = DeviceDescriptor::new(name, DeviceClass::Platform);
+        self.register_descriptor(descriptor)
+    }
+
+    fn resources_overlap(
+        candidate: HardwareResource,
+        existing: [HardwareResource; RESOURCE_SLOTS],
+        existing_count: usize,
+    ) -> bool {
+        for resource in existing.iter().take(existing_count) {
+            let overlaps = match (candidate, *resource) {
+                (HardwareResource::PortRange { base: a, length: la },
+                 HardwareResource::PortRange { base: b, length: lb }) => {
+                    let a_end = a as usize + la as usize;
+                    let b_end = b as usize + lb as usize;
+                    (a as usize) < b_end && (b as usize) < a_end
+                }
+                (HardwareResource::Irq { line: a }, HardwareResource::Irq { line: b }) => a == b,
+                (HardwareResource::MemoryRange { base: a, length: la },
+                 HardwareResource::MemoryRange { base: b, length: lb }) => {
+                    let a_end = a.saturating_add(la);
+                    let b_end = b.saturating_add(lb);
+                    a < b_end && b < a_end
+                }
+                _ => false,
+            };
+            if overlaps {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Mark discovery complete and publish a driver as ready to initialize.
+    pub fn initialize(&self, name: &str) -> bool {
+        let mut slots = self.slots.lock();
+        if let Some(slot) = slots.iter_mut().find(|slot| slot.name == name) {
+            slot.state = DeviceState::Initialized;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn activate(&self, name: &str) -> bool {
+        let mut slots = self.slots.lock();
+        if let Some(slot) = slots.iter_mut().find(|slot| slot.name == name) {
+            if slot.state == DeviceState::Initialized {
+                slot.state = DeviceState::Active;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn descriptor(&self, name: &str) -> Option<DeviceDescriptor> {
+        let slots = self.slots.lock();
+        let descriptors = self.descriptors.lock();
+        for (index, slot) in slots.iter().enumerate() {
+            if slot.name == name
+                && matches!(slot.state, DeviceState::Discovered
+                    | DeviceState::Registered
+                    | DeviceState::Initialized
+                    | DeviceState::Active)
+            {
+                return descriptors[index];
+            }
+        }
+        None
+    }
+
+    pub fn register_interrupt(
+        &self,
+        owner: &'static str,
+        vector: u8,
+        irq: u8,
+        mode: InterruptMode,
+        handler: Option<InterruptHandler>,
+    ) -> bool {
+        let mut interrupts = self.interrupts.lock();
+        if interrupts.iter().any(|entry| {
+            entry.map_or(false, |registration| {
+                registration.vector == vector
+                    && registration.mode == InterruptMode::Exclusive
+            })
+        }) {
+            return false;
+        }
+        for entry in interrupts.iter_mut() {
+            if entry.is_none() {
+                *entry = Some(InterruptRegistration {
+                    owner,
+                    vector,
+                    irq,
+                    mode,
+                    handler,
+                });
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn unregister_interrupt(&self, owner: &str, vector: u8) -> bool {
+        let mut interrupts = self.interrupts.lock();
+        for entry in interrupts.iter_mut() {
+            if entry.map_or(false, |registration| {
+                registration.owner == owner && registration.vector == vector
+            }) {
+                *entry = None;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Dispatch a device interrupt only when a registered handler exists.
+    pub fn dispatch_interrupt(&self, vector: u8) -> bool {
+        let interrupts = self.interrupts.lock();
+        if let Some(registration) = interrupts.iter().flatten().find(|registration| {
+            registration.vector == vector
+        }) {
+            if let Some(handler) = registration.handler {
+                return handler();
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Begin removal: release descriptor resources and IRQ registrations,
+    /// then publish the slot as removed.
+    pub fn remove(&self, name: &str) -> bool {
+        let mut slots = self.slots.lock();
+        let mut descriptors = self.descriptors.lock();
+        let mut interrupts = self.interrupts.lock();
+        if let Some(slot) = slots.iter_mut().find(|slot| slot.name == name) {
+            for descriptor in descriptors.iter_mut() {
+                if descriptor.map_or(false, |value| value.name == name) {
+                    *descriptor = None;
+                }
+            }
+            for entry in interrupts.iter_mut() {
+                if entry.map_or(false, |registration| registration.owner == name) {
+                    *entry = None;
+                }
+            }
+            *slot = DeviceRegistration {
+                name: "",
+                state: DeviceState::Removed,
+            };
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.slots.lock()
+            .iter()
+            .filter(|slot| matches!(slot.state,
+                DeviceState::Discovered
+                | DeviceState::Registered
+                | DeviceState::Initialized
+                | DeviceState::Active))
+            .count()
+    }
+}
+
+pub static DEVICE_REGISTRY: DeviceRegistry = DeviceRegistry::new();
+
+fn descriptor_with_port(
+    name: &'static str,
+    class: DeviceClass,
+    base: u16,
+    length: u16,
+    irq: Option<u8>,
+) -> DeviceDescriptor {
+    let mut descriptor = DeviceDescriptor::new(name, class);
+    descriptor.resources[0] = HardwareResource::PortRange { base, length };
+    descriptor.resource_count = 1;
+    if let Some(line) = irq {
+        if descriptor.resource_count < RESOURCE_SLOTS {
+            descriptor.resources[descriptor.resource_count] =
+                HardwareResource::Irq { line };
+            descriptor.resource_count += 1;
+        }
+    }
+    descriptor
+}
+
+/// Hardware discovery only publishes device descriptions and claims.
+/// Driver construction and initialization remain responsibilities of the
+/// corresponding implementation module.
+pub fn discover_legacy_devices() -> usize {
+    let discovered = [
+        descriptor_with_port("COM1 serial", DeviceClass::Platform, 0x3F8, 8, Some(4)),
+        descriptor_with_port("i8253 PIT", DeviceClass::Platform, 0x40, 4, Some(0)),
+        descriptor_with_port("8259 PIC", DeviceClass::Platform, 0x20, 2, None),
+        descriptor_with_port("PS/2 keyboard", DeviceClass::Input, 0x60, 5, Some(1)),
+        descriptor_with_port("VGA text", DeviceClass::Display, 0x3D4, 12, None),
+    ];
+    let mut count = 0;
+    for descriptor in discovered.iter().copied() {
+        if DEVICE_REGISTRY.register_descriptor(descriptor) {
+            count += 1;
+        }
+    }
+    count
+}
 
 /// Common status interface for device initialization and health reporting.
 pub trait Device {
     fn name(&self) -> &'static str;
     fn initialize(&mut self) -> bool;
+    fn shutdown(&mut self) -> bool {
+        // Drivers without additional teardown can safely use this default.
+        true
+    }
     fn ready(&self) -> bool;
 }
 
@@ -265,6 +622,8 @@ pub fn init_display(multiboot_magic: u32, multiboot_info: usize) -> Result<(), I
     FRAMEBUFFER_GREEN_POSITION.store(green_position, Ordering::Release);
     FRAMEBUFFER_BLUE_POSITION.store(blue_position, Ordering::Release);
     FRAMEBUFFER_ENABLED.store(true, Ordering::Release);
+    crate::drivers::DEVICE_REGISTRY.initialize("VGA text");
+    crate::drivers::DEVICE_REGISTRY.activate("VGA text");
     Ok(())
 }
 
@@ -567,6 +926,13 @@ impl Device for AtaPio {
 
     fn initialize(&mut self) -> bool {
         self.identify().is_some()
+    }
+
+    fn shutdown(&mut self) -> bool {
+        // PIO mode has no reset/register teardown; stop accepting reads and
+        // let the registry revoke the port and interrupt ownership.
+        self.ready.store(false, Ordering::Release);
+        true
     }
 
     fn ready(&self) -> bool {

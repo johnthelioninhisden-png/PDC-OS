@@ -177,7 +177,12 @@ pub fn execute(line: &str) {
         // System identity is currently compile-time static text. Replace this
         // with kernel/build metadata once version and architecture configuration
         // are centralized.
-        "uname" => println!("PDC-OS 0.1.0 x86_64"),
+        "uname" => println!(
+            "{} {} {}",
+            crate::kernel::core::OS_NAME,
+            crate::kernel::core::OS_VERSION,
+            crate::kernel::core::OS_ARCH
+        ),
         // PIT tick reporting is read-only. A richer uptime command could convert
         // ticks to elapsed time after timer calibration is implemented.
         "uptime" => println!("PIT ticks: {}", crate::interrupts::tick_count()),

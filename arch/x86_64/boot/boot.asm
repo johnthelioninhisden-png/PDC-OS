@@ -218,11 +218,16 @@ long_mode_error:
     db "PDC-OS boot failure: CPU lacks required long-mode features", 13, 10, 0
 
 align 8
-; Null, 64-bit code, and 64-bit data descriptors used for the long-mode jump.
+; Null, 64-bit code, 64-bit data, and a reserved TSS descriptor pair.
+; The TSS pair is filled by the Rust TSS initializer after a frame is allocated.
+global gdt64
 gdt64:
     dq 0
     dq 0x00AF9A000000FFFF
     dq 0x00AF92000000FFFF
+    dq 0
+    dq 0
+global gdt_pointer
 gdt_pointer:
     dw gdt_pointer - gdt64 - 1
     dq gdt64

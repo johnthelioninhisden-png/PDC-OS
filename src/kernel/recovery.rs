@@ -3,8 +3,8 @@
 //! This module provides a bounded, allocation-free recovery path shared by
 //! initialization failures, exceptions, and the panic handler.
 
-use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::interrupts::save_interrupt_state;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootStage {
@@ -64,10 +64,7 @@ static BOOT_STAGE: AtomicUsize = AtomicUsize::new(0);
 
 pub fn set_boot_stage(stage: BootStage) {
     BOOT_STAGE.store(stage as usize, Ordering::Release);
-    crate::serial::println(format_args!(
-        "PDC-OS boot stage: {}",
-        stage.name()
-    ));
+    crate::serial::println(format_args!("PDC-OS boot stage: {}", stage.name()));
 }
 
 pub fn boot_stage() -> BootStage {
@@ -92,11 +89,7 @@ pub fn report_init_failure(device: &str, error: InitError) {
         error.name(),
         boot_stage().name()
     ));
-    crate::println!(
-        "{} unavailable: {}",
-        device,
-        error.name()
-    );
+    crate::println!("{} unavailable: {}", device, error.name());
 }
 
 pub fn report_system_context(prefix: &str) {
@@ -116,7 +109,11 @@ pub fn report_system_context(prefix: &str) {
         rflags,
         crate::interrupts::tick_count(),
         crate::scheduler::SCHEDULER.with(|scheduler| scheduler.task_count()),
-        if rflags & (1 << 9) != 0 { "enabled" } else { "disabled" }
+        if rflags & (1 << 9) != 0 {
+            "enabled"
+        } else {
+            "disabled"
+        }
     ));
 }
 

@@ -143,7 +143,9 @@ impl RamFs {
             let mut os_release = Node::empty();
             os_release.set_path("/etc/os-release");
             os_release.kind = NodeKind::File;
-            let data = b"NAME=PDC-OS\nVERSION=0.1.0\nARCH=x86_64\n";
+            // Build the release record from the same identity constants used by
+            // the shell and boot diagnostics, preventing version-string drift.
+            let data = crate::kernel::core::OS_RELEASE.as_bytes();
             os_release.data[..data.len()].copy_from_slice(data);
             os_release.size = data.len();
             self.nodes[8] = os_release;
@@ -349,10 +351,22 @@ impl Vfs {
         // Detect storage at boot, but do not assume that it contains a
         // filesystem.  It is mounted as a raw block source for future format
         // drivers and is always represented explicitly by `mount`.
+        let mut ata_descriptor = crate::drivers::DeviceDescriptor::new(
+            "ATA PIO storage",
+            crate::drivers::DeviceClass::Storage,
+        );
+        ata_descriptor.resources[0] =
+            crate::drivers::HardwareResource::PortRange { base: 0x1F0, length: 8 };
+        ata_descriptor.resources[1] =
+            crate::drivers::HardwareResource::Irq { line: 14 };
+        ata_descriptor.resource_count = 2;
+        let _ = crate::drivers::DEVICE_REGISTRY.register_descriptor(ata_descriptor);
         let mut ata = AtaPio::primary_master();
         match ata.initialize_result() {
             Ok(_) => {
                 self.ata_ready = true;
+                crate::drivers::DEVICE_REGISTRY.initialize("ATA PIO storage");
+                crate::drivers::DEVICE_REGISTRY.activate("ATA PIO storage");
                 crate::serial::println(format_args!(
                     "Storage initialization complete: ATA primary-master"
                 ));

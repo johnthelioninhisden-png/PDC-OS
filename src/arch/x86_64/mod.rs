@@ -6,6 +6,8 @@ use crate::hal::{
 use crate::memory::{PageFlags, PhysicalAddress, VirtualAddress};
 
 pub mod cpu;
+pub mod tss;
+pub mod context;
 pub use cpu::{HardwareInfo, detect};
 
 impl Cpu for HardwareInfo {
@@ -118,8 +120,25 @@ impl CpuMemoryProtection for X86_64 {
                     in("edx") high,
                     options(nostack, nomem, preserves_flags),
                 );
+
+                // Read EFER back so success means the control bit is observable,
+                // rather than merely that WRMSR completed.
+                let mut enabled_low: u32;
+                let mut enabled_high: u32;
+                core::arch::asm!(
+                    "rdmsr",
+                    in("ecx") 0xc0000080u32,
+                    lateout("eax") enabled_low,
+                    lateout("edx") enabled_high,
+                    options(nostack, nomem, preserves_flags),
+                );
+                let enabled = enabled_low & (1 << 11) != 0;
+                let _ = enabled_high;
+                cpu::set_nxe_enabled(enabled);
+                return enabled;
             }
         }
+        cpu::set_nxe_enabled(false);
         supported
     }
 
@@ -132,7 +151,15 @@ impl CpuMemoryProtection for X86_64 {
                 cr0 = in(reg) cr0 | (1u64 << 16),
                 options(nostack, preserves_flags),
             );
+            let enabled_cr0: u64;
+            core::arch::asm!(
+                "mov {enabled_cr0}, cr0",
+                enabled_cr0 = out(reg) enabled_cr0,
+                options(nomem, nostack),
+            );
+            let enabled = enabled_cr0 & (1u64 << 16) != 0;
+            cpu::set_write_protection_enabled(enabled);
+            return enabled;
         }
-        true
     }
 }

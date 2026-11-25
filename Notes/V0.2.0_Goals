@@ -1,0 +1,125 @@
+# PDC-OS — Stage 1: Kernel Architecture Upgrade
+
+**Target release:** PDC-OS 0.2.0  
+**Objective:** Restructure and strengthen the existing kernel so future development does not require major architectural rewrites.
+
+This stage prioritizes architecture, ownership, interfaces, reliability, and maintainability over adding new user-facing features.
+
+
+Please check [] items when your done. 
+example:
+not done: []
+
+done: [x]
+
+## 1. Establish the architecture boundaries
+- [x] Separate architecture-specific code into `arch/x86_64/`.
+- [x] Establish the initial Hardware Abstraction Layer (HAL).
+- [x] Separate generic kernel logic from hardware operations.
+- [x] Define subsystem responsibilities and dependencies.
+- [x] Establish consistent initialization and shutdown interfaces.
+
+## 2. Formalize memory management
+- [x] Introduce distinct physical and virtual address types.
+- [x] Document the virtual address-space layout.
+- [x] Define kernel and userspace memory regions.
+- [x] Establish page-table and physical-frame ownership.
+- [x] Implement reliable address-space cleanup.
+- [x] Establish TLB invalidation interfaces.
+
+## 3. Establish the process and thread model
+- [x] Separate process metadata from scheduler threads.
+- [x] Define process and thread lifecycle states.
+- [x] Establish thread-owned kernel stacks.
+- [x] Design userspace stack allocation.
+- [x] Define process resource ownership and cleanup.
+- [x] Prepare structures for independent address spaces.
+
+## 4. Improve execution and interrupt architecture
+- [x] Separate generic context management from x86-64 switching.
+- [x] Formalize interrupt-frame structures.
+- [x] Establish TSS and IST infrastructure.
+- [x] Introduce per-CPU data abstractions.
+- [x] Define safe interrupt and scheduling boundaries.
+
+## 5. Strengthen synchronization
+- [x] Audit existing locks and IRQ-safe locking.
+- [x] Establish consistent locking conventions.
+- [x] Define blocking and wakeup contracts.
+- [x] Identify lock-order dependencies.
+- [x] Test contention and interrupt interactions.
+
+## 6. Standardize driver architecture
+- [x] Establish device registration interfaces.
+- [x] Separate hardware discovery from driver implementations.
+- [x] Define driver initialization and removal lifecycles.
+- [x] Standardize hardware resource ownership.
+- [x] Establish interrupt registration contracts.
+
+## 7. Formalize kernel interfaces
+- [x] Define subsystem-facing APIs.
+- [x] Standardize kernel error handling.
+- [x] Document syscall boundaries and existing limitations.
+- [x] Separate architecture-specific interfaces from generic services.
+- [x] Establish versioning rules for future ABI development.
+
+## 8. Strengthen kernel security foundations
+- [x] Enable NXE where supported.
+- [x] Enable CR0.WP.
+- [x] Validate memory mappings and permissions.
+- [x] Audit pointer validation and arithmetic overflow.
+- [x] Identify unsafe Rust boundaries.
+- [x] Document current privilege-isolation limitations.
+
+## 9. Build a kernel verification suite
+- [x] Test repeated allocation and deallocation.
+- [x] Test heap and frame allocator exhaustion.
+- [x] Test page-table creation and destruction.
+- [x] Test task creation and cleanup.
+- [x] Test lock contention and interrupt safety.
+- [x] Test malformed boot information.
+- [x] Add automated QEMU regression tests.
+
+## 10. Complete the architectural migration
+- [x] Migrate existing code incrementally into the new structure.
+- [x] Preserve existing boot and shell functionality.
+- [x] Update architecture and subsystem documentation.
+- [x] Verify reproducible builds.
+- [x] Audit unresolved architectural decisions.
+- [ ] **Leave to USER** Publish the PDC-OS 0.2.0 development baseline.
+
+
+   11. Subsystem dependency map: Document which subsystems depend on which others.
+   [x]
+
+
+   12. Ownership matrix: Identify the owner and cleanup responsibility of every major resource.
+   [x]
+
+
+   13. Synchronization specification: Document lock ordering, IRQ safety, blocking rules, and scheduling interactions.
+   [x]
+
+
+   14. HAL contract: Explicitly define what generic kernel code may expect from an architecture backend.
+   [x]
+
+
+   15. Failure-path test suite: Test allocation exhaustion, partial initialization, invalid inputs, and cleanup.
+   [x]
+---
+
+## Stage 1 completion criteria
+
+PDC-OS 0.2.0 is ready when:
+
+- The kernel has clearly separated architecture-specific and generic code.
+- Memory, process, thread, and synchronization ownership are documented.
+- Subsystems have defined interfaces and initialization contracts.
+- Existing functionality remains operational.
+- Critical resource allocation and cleanup paths have automated tests.
+- The architecture is ready for the protected execution work planned in 0.3.0.
+
+**Important:** This release is an architectural upgrade, not a feature-count competition. Avoid implementing Ring 3, networking, or persistent storage prematurely. Establish the foundations that make those features safe and maintainable.
+
+**Engineering principle: Stabilize the foundations before expanding the system.**

@@ -1,13 +1,19 @@
 //! Interrupt Descriptor Table, PIC remapping, and PIT timer setup.
 
-use core::sync::atomic::{AtomicUsize, Ordering};
-use core::mem::size_of;
-use core::sync::atomic::AtomicBool;
 use core::cell::UnsafeCell;
+use core::mem::size_of;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Interrupt-state-preserving spin lock for short critical sections.
+///
+/// Acquiring this lock disables IRQ delivery, preserves the prior RFLAGS.IF
+/// state, and restores that state only when the guard is dropped.  The lock
+/// must never be held across blocking operations or while acquiring a lock
+/// with a lower place in the documented lock order.
 pub struct IrqLock<T: ?Sized> {
     locked: AtomicBool,
+    acquisitions: AtomicUsize,
+    contended: AtomicUsize,
     value: UnsafeCell<T>,
 }
 
@@ -20,17 +26,67 @@ impl<T> IrqLock<T> {
     pub const fn new(value: T) -> Self {
         Self {
             locked: AtomicBool::new(false),
+            acquisitions: AtomicUsize::new(0),
+            contended: AtomicUsize::new(0),
             value: UnsafeCell::new(value),
         }
     }
 
     pub fn lock(&self) -> IrqGuard<'_, T> {
         let rflags = save_interrupt_state();
-        unsafe { core::arch::asm!("cli", options(nomem, nostack)); }
-        while self.locked.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
-            core::hint::spin_loop();
+        unsafe {
+            core::arch::asm!("cli", options(nomem, nostack));
         }
-        IrqGuard { lock: self, rflags }
+        loop {
+            match self
+                .locked
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            {
+                Ok(_) => {
+                    self.acquisitions.fetch_add(1, Ordering::Relaxed);
+                    return IrqGuard { lock: self, rflags };
+                }
+                Err(_) => {
+                    // Count observed contention, but keep the call bounded only
+                    // by the lock holder; IRQ masking prevents recursive IRQ use.
+                    self.contended.fetch_add(1, Ordering::Relaxed);
+                    core::hint::spin_loop();
+                }
+            }
+        }
+    }
+
+    /// Attempt acquisition once, preserving IRQ state on either outcome.
+    /// This is suitable for IRQ handlers that must not spin.
+    pub fn try_lock(&self) -> Option<IrqGuard<'_, T>> {
+        let rflags = save_interrupt_state();
+        unsafe {
+            core::arch::asm!("cli", options(nomem, nostack));
+        }
+        if self
+            .locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            self.acquisitions.fetch_add(1, Ordering::Relaxed);
+            Some(IrqGuard { lock: self, rflags })
+        } else {
+            // The failed try does not own the critical section, so restore the
+            // caller's interrupt state immediately.
+            restore_interrupt_state(rflags);
+            None
+        }
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.locked.load(Ordering::Acquire)
+    }
+
+    pub fn statistics(&self) -> (usize, usize) {
+        (
+            self.acquisitions.load(Ordering::Relaxed),
+            self.contended.load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -74,9 +130,13 @@ pub fn save_interrupt_state() -> u64 {
 #[inline]
 pub fn restore_interrupt_state(rflags: u64) {
     if rflags & (1 << 9) != 0 {
-        unsafe { core::arch::asm!("sti", options(nomem, nostack)); }
+        unsafe {
+            core::arch::asm!("sti", options(nomem, nostack));
+        }
     } else {
-        unsafe { core::arch::asm!("cli", options(nomem, nostack)); }
+        unsafe {
+            core::arch::asm!("cli", options(nomem, nostack));
+        }
     }
 }
 
@@ -123,6 +183,12 @@ impl IdtEntry {
         self.reserved = 0;
     }
 
+    fn set_handler_with_ist(&mut self, offset: u64, ist: u8) {
+        // IST values 1 through 7 select TSS IST1 through IST7; zero disables IST.
+        self.set_handler(offset);
+        self.ist = ist;
+    }
+
     fn set_user_handler(&mut self, offset: u64) {
         // Ring 3 may enter this gate, but the target code remains in ring 0.
         self.set_handler(offset);
@@ -154,6 +220,40 @@ static mut IDT: Idt = Idt::new();
 // The timer interrupt only increments this counter; Relaxed ordering is enough
 // because it does not publish or synchronize any other memory.
 static TICKS: AtomicUsize = AtomicUsize::new(0);
+
+/// The fixed 22-slot layout shared by assembly entry and Rust dispatch.
+///
+/// Assembly pushes R15 through RAX, then the synthetic vector/error slots,
+/// followed by the processor IRET frame.  These fields intentionally mirror
+/// that stack layout and must not be reordered.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct InterruptFrame {
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub rbp: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub rcx: u64,
+    pub rbx: u64,
+    pub rax: u64,
+    pub vector: u64,
+    pub error_code: u64,
+    pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
+}
+
+pub const INTERRUPT_FRAME_SIZE: usize = core::mem::size_of::<InterruptFrame>();
 
 // Port I/O is privileged and is only called during kernel setup or IRQ handling.
 unsafe fn outb(port: u16, value: u8) {
@@ -254,41 +354,80 @@ pub fn init() {
         // Vectors 0-63 have dedicated assembly stubs. The remaining entries
         // temporarily reuse the timer stub until exception handling is expanded.
         let handlers: [u64; 64] = [
-            stub_address!(isr_stub_0), stub_address!(isr_stub_1),
-            stub_address!(isr_stub_2), stub_address!(isr_stub_3),
-            stub_address!(isr_stub_4), stub_address!(isr_stub_5),
-            stub_address!(isr_stub_6), stub_address!(isr_stub_7),
-            stub_address!(isr_stub_8), stub_address!(isr_stub_9),
-            stub_address!(isr_stub_10), stub_address!(isr_stub_11),
-            stub_address!(isr_stub_12), stub_address!(isr_stub_13),
-            stub_address!(isr_stub_14), stub_address!(isr_stub_15),
-            stub_address!(isr_stub_16), stub_address!(isr_stub_17),
-            stub_address!(isr_stub_18), stub_address!(isr_stub_19),
-            stub_address!(isr_stub_20), stub_address!(isr_stub_21),
-            stub_address!(isr_stub_22), stub_address!(isr_stub_23),
-            stub_address!(isr_stub_24), stub_address!(isr_stub_25),
-            stub_address!(isr_stub_26), stub_address!(isr_stub_27),
-            stub_address!(isr_stub_28), stub_address!(isr_stub_29),
-            stub_address!(isr_stub_30), stub_address!(isr_stub_31),
-            stub_address!(isr_stub_32), stub_address!(isr_stub_33),
-            stub_address!(isr_stub_34), stub_address!(isr_stub_35),
-            stub_address!(isr_stub_36), stub_address!(isr_stub_37),
-            stub_address!(isr_stub_38), stub_address!(isr_stub_39),
-            stub_address!(isr_stub_40), stub_address!(isr_stub_41),
-            stub_address!(isr_stub_42), stub_address!(isr_stub_43),
-            stub_address!(isr_stub_44), stub_address!(isr_stub_45),
-            stub_address!(isr_stub_46), stub_address!(isr_stub_47),
-            stub_address!(isr_stub_48), stub_address!(isr_stub_49),
-            stub_address!(isr_stub_50), stub_address!(isr_stub_51),
-            stub_address!(isr_stub_52), stub_address!(isr_stub_53),
-            stub_address!(isr_stub_54), stub_address!(isr_stub_55),
-            stub_address!(isr_stub_56), stub_address!(isr_stub_57),
-            stub_address!(isr_stub_58), stub_address!(isr_stub_59),
-            stub_address!(isr_stub_60), stub_address!(isr_stub_61),
-            stub_address!(isr_stub_62), stub_address!(isr_stub_63),
+            stub_address!(isr_stub_0),
+            stub_address!(isr_stub_1),
+            stub_address!(isr_stub_2),
+            stub_address!(isr_stub_3),
+            stub_address!(isr_stub_4),
+            stub_address!(isr_stub_5),
+            stub_address!(isr_stub_6),
+            stub_address!(isr_stub_7),
+            stub_address!(isr_stub_8),
+            stub_address!(isr_stub_9),
+            stub_address!(isr_stub_10),
+            stub_address!(isr_stub_11),
+            stub_address!(isr_stub_12),
+            stub_address!(isr_stub_13),
+            stub_address!(isr_stub_14),
+            stub_address!(isr_stub_15),
+            stub_address!(isr_stub_16),
+            stub_address!(isr_stub_17),
+            stub_address!(isr_stub_18),
+            stub_address!(isr_stub_19),
+            stub_address!(isr_stub_20),
+            stub_address!(isr_stub_21),
+            stub_address!(isr_stub_22),
+            stub_address!(isr_stub_23),
+            stub_address!(isr_stub_24),
+            stub_address!(isr_stub_25),
+            stub_address!(isr_stub_26),
+            stub_address!(isr_stub_27),
+            stub_address!(isr_stub_28),
+            stub_address!(isr_stub_29),
+            stub_address!(isr_stub_30),
+            stub_address!(isr_stub_31),
+            stub_address!(isr_stub_32),
+            stub_address!(isr_stub_33),
+            stub_address!(isr_stub_34),
+            stub_address!(isr_stub_35),
+            stub_address!(isr_stub_36),
+            stub_address!(isr_stub_37),
+            stub_address!(isr_stub_38),
+            stub_address!(isr_stub_39),
+            stub_address!(isr_stub_40),
+            stub_address!(isr_stub_41),
+            stub_address!(isr_stub_42),
+            stub_address!(isr_stub_43),
+            stub_address!(isr_stub_44),
+            stub_address!(isr_stub_45),
+            stub_address!(isr_stub_46),
+            stub_address!(isr_stub_47),
+            stub_address!(isr_stub_48),
+            stub_address!(isr_stub_49),
+            stub_address!(isr_stub_50),
+            stub_address!(isr_stub_51),
+            stub_address!(isr_stub_52),
+            stub_address!(isr_stub_53),
+            stub_address!(isr_stub_54),
+            stub_address!(isr_stub_55),
+            stub_address!(isr_stub_56),
+            stub_address!(isr_stub_57),
+            stub_address!(isr_stub_58),
+            stub_address!(isr_stub_59),
+            stub_address!(isr_stub_60),
+            stub_address!(isr_stub_61),
+            stub_address!(isr_stub_62),
+            stub_address!(isr_stub_63),
         ];
         for (index, entry) in (*idt).entries.iter_mut().enumerate() {
-            entry.set_handler(handlers.get(index).copied().unwrap_or(handlers[32]));
+            let offset = handlers.get(index).copied().unwrap_or(handlers[32]);
+            if index == 8 {
+                // Double fault has a dedicated IST stack so a compromised kernel
+                // stack cannot prevent the processor from reporting the fault.
+                entry.set_handler_with_ist(offset, 1);
+            } else {
+                entry.set_handler(offset);
+            }
         }
 
         // Expose only the deliberately selected int 0x80 syscall gate to ring 3.
@@ -297,21 +436,43 @@ pub fn init() {
         // Move IRQs away from CPU exception vectors, then program PIT channel 0
         // for approximately 1 kHz and unmask timer and keyboard IRQs.
         remap_pic();
+        crate::drivers::DEVICE_REGISTRY.initialize("8259 PIC");
+        crate::drivers::DEVICE_REGISTRY.activate("8259 PIC");
         // Device setup is delegated to the PIT driver; IRQ setup remains in
         // the interrupt controller subsystem.
         let mut pit = crate::drivers::Pit::new();
         match pit.initialize_result() {
-            Ok(_) => crate::serial::println(format_args!(
-                "PIT initialization complete: channel0=~1000Hz"
-            )),
+            Ok(_) => {
+                crate::drivers::DEVICE_REGISTRY.initialize("i8253 PIT");
+                crate::drivers::DEVICE_REGISTRY.activate("i8253 PIT");
+                let _ = crate::drivers::DEVICE_REGISTRY.register_interrupt(
+                    "i8253 PIT",
+                    32,
+                    0,
+                    crate::drivers::InterruptMode::Exclusive,
+                    None,
+                );
+                crate::serial::println(format_args!(
+                    "PIT initialization complete: channel0=~1000Hz"
+                ));
+            },
             Err(error) => crate::recovery::report_init_failure("PIT", error),
         }
         // Initialize PS/2 before enabling IRQ 1.  A timeout or controller
         // failure is reported but does not prevent the serial/text fallbacks.
         match crate::userspace::keyboard::init_result() {
-            Ok(_) => crate::serial::println(format_args!(
-                "PS/2 keyboard initialization complete"
-            )),
+            Ok(_) => {
+                crate::drivers::DEVICE_REGISTRY.initialize("PS/2 keyboard");
+                crate::drivers::DEVICE_REGISTRY.activate("PS/2 keyboard");
+                let _ = crate::drivers::DEVICE_REGISTRY.register_interrupt(
+                    "PS/2 keyboard",
+                    33,
+                    1,
+                    crate::drivers::InterruptMode::Exclusive,
+                    None,
+                );
+                crate::serial::println(format_args!("PS/2 keyboard initialization complete"));
+            },
             Err(error) => crate::recovery::report_init_failure("PS/2 keyboard", error),
         }
         // IRQ0 and IRQ1 are the only mask bits enabled in this prototype.
@@ -405,36 +566,41 @@ pub extern "C" fn interrupt_dispatch(
     vector: u64,
     error_code: u64,
     cr2: u64,
-    interrupt_rsp: *mut u64,
+    interrupt_rsp: *mut InterruptFrame,
 ) -> *mut u64 {
+    let frame = unsafe { &mut *interrupt_rsp };
+    let (task_id, _, _) = crate::scheduler::SCHEDULER.with(|scheduler| scheduler.diagnostic_task());
+    // Publish interrupt ownership before dispatch.  Leave happens for all
+    // paths that return to assembly; exception paths halt the CPU.
+    crate::kernel::percpu::enter_interrupt(task_id);
+
     if vector == 128 {
         let syscall_start = crate::performance::timestamp();
         // The syscall frame follows the shared assembly register layout:
         // RAX, RBX, RCX, and RDX carry number and arguments; RAX receives result.
-        let number = unsafe { interrupt_rsp.add(14).read() } as usize;
-        let arg1 = unsafe { interrupt_rsp.add(13).read() } as usize;
-        let arg2 = unsafe { interrupt_rsp.add(12).read() } as usize;
-        let arg3 = unsafe { interrupt_rsp.add(11).read() } as usize;
+        let number = frame.rax as usize;
+        let arg1 = frame.rbx as usize;
+        let arg2 = frame.rcx as usize;
+        let arg3 = frame.rdx as usize;
         let result = crate::userspace::syscalls::dispatch_args(number, arg1, arg2, arg3);
         crate::performance::record_syscall(syscall_start);
-        unsafe {
-            interrupt_rsp.add(14).write(result as u64);
-        }
-        return interrupt_rsp;
+        frame.rax = result as u64;
+        crate::kernel::percpu::leave_interrupt();
+        return interrupt_rsp.cast::<u64>();
     }
     if vector < 32 {
         // Preserve a bounded diagnostic snapshot: register frame, fault address,
         // task identity, boot stage, and allocator state are all printable here.
-        let rax = unsafe { interrupt_rsp.add(14).read() };
-        let rbx = unsafe { interrupt_rsp.add(13).read() };
-        let rcx = unsafe { interrupt_rsp.add(12).read() };
-        let rdx = unsafe { interrupt_rsp.add(11).read() };
-        let rsi = unsafe { interrupt_rsp.add(10).read() };
-        let rdi = unsafe { interrupt_rsp.add(9).read() };
-        let rbp = unsafe { interrupt_rsp.add(8).read() };
-        let rip = unsafe { interrupt_rsp.add(17).read() };
-        let rflags = unsafe { interrupt_rsp.add(19).read() };
-        let rsp = unsafe { interrupt_rsp.add(20).read() };
+        let rax = frame.rax;
+        let rbx = frame.rbx;
+        let rcx = frame.rcx;
+        let rdx = frame.rdx;
+        let rsi = frame.rsi;
+        let rdi = frame.rdi;
+        let rbp = frame.rbp;
+        let rip = frame.rip;
+        let rflags = frame.rflags;
+        let rsp = frame.rsp;
         let (task_id, task_name, task_state) =
             crate::scheduler::SCHEDULER.with(|scheduler| scheduler.diagnostic_task());
         unsafe {
@@ -443,17 +609,31 @@ pub extern "C" fn interrupt_dispatch(
         if vector == 14 {
             crate::serial::println(format_args!(
                 "KERNEL EXCEPTION: vector {} ({}) error={:#x} CR2={:#x}",
-                vector, exception_name(vector), error_code, cr2
+                vector,
+                exception_name(vector),
+                error_code,
+                cr2
             ));
-            crate::println!("KERNEL EXCEPTION: vector {} ({}) error={:#x} CR2={:#x}",
-                vector, exception_name(vector), error_code, cr2);
+            crate::println!(
+                "KERNEL EXCEPTION: vector {} ({}) error={:#x} CR2={:#x}",
+                vector,
+                exception_name(vector),
+                error_code,
+                cr2
+            );
         } else {
             crate::serial::println(format_args!(
                 "KERNEL EXCEPTION: vector {} ({}) error={:#x}",
-                vector, exception_name(vector), error_code
+                vector,
+                exception_name(vector),
+                error_code
             ));
-            crate::println!("KERNEL EXCEPTION: vector {} ({}) error={:#x}",
-                vector, exception_name(vector), error_code);
+            crate::println!(
+                "KERNEL EXCEPTION: vector {} ({}) error={:#x}",
+                vector,
+                exception_name(vector),
+                error_code
+            );
         }
         crate::serial::println(format_args!(
             "EXCEPTION CONTEXT: RIP={:#x} RSP={:#x} RFLAGS={:#x} RAX={:#x} RBX={:#x}",
@@ -474,7 +654,10 @@ pub extern "C" fn interrupt_dispatch(
         ));
         crate::println!(
             "EXCEPTION CONTEXT: RIP={:#x} RSP={:#x} stage={} task={}",
-            rip, rsp, crate::recovery::boot_stage().name(), task_name
+            rip,
+            rsp,
+            crate::recovery::boot_stage().name(),
+            task_name
         );
         loop {
             unsafe {
@@ -489,22 +672,24 @@ pub extern "C" fn interrupt_dispatch(
     if vector == 32 {
         let irq_start = crate::performance::timestamp();
         TICKS.fetch_add(1, Ordering::Relaxed);
-        let switched_rsp = crate::scheduler::SCHEDULER.with(|scheduler| {
-            scheduler.tick_context(interrupt_rsp)
-        });
+        let switched_rsp = crate::scheduler::SCHEDULER
+            .with(|scheduler| scheduler.tick_context(interrupt_rsp.cast::<u64>()));
         acknowledge_pic(vector);
         crate::performance::record_irq(irq_start);
+        crate::kernel::percpu::leave_interrupt();
         switched_rsp
     } else if vector == 33 {
         // PS/2 IRQ work is bounded to reading and queueing a key event.
         crate::userspace::keyboard::handle_irq();
         acknowledge_pic(vector);
-        interrupt_rsp
+        crate::kernel::percpu::leave_interrupt();
+        interrupt_rsp.cast::<u64>()
     } else if vector >= 32 {
         acknowledge_pic(vector);
-        interrupt_rsp
+        crate::kernel::percpu::leave_interrupt();
+        interrupt_rsp.cast::<u64>()
     } else {
-        interrupt_rsp
+        interrupt_rsp.cast::<u64>()
     }
 }
 
